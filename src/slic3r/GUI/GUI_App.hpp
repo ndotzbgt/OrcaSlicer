@@ -21,6 +21,9 @@
 #include "slic3r/GUI/Jobs/UpgradeNetworkJob.hpp"
 #include "slic3r/GUI/HttpServer.hpp"
 #include "../Utils/PrintHost.hpp"
+#include "slic3r/GUI/AIHelper/AIHelper.hpp"
+#include "slic3r/GUI/AIHelper/AIEngineFactory.hpp"
+#include "slic3r/GUI/AIHelper/Keychain.hpp"
 
 #include <wx/app.h>
 #include <wx/colour.h>
@@ -727,6 +730,9 @@ public:
     ImGuiWrapper* imgui() { return m_imgui.get(); }
 
     PrintHostJobQueue& printhost_job_queue() { return *m_printhost_job_queue.get(); }
+
+    AIHelper* ai_helper() const { return mainframe ? mainframe->ai_helper() : nullptr; }
+    void initialize_ai_helper();
 
     void            open_web_page_localized(const std::string &http_address);
     bool            may_switch_to_SLA_preset(const wxString& caption);

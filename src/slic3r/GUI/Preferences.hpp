@@ -74,6 +74,14 @@ public:
     ::TextInput *m_backup_interval_textinput = {nullptr};
     ::SpinInput *m_dim_previous_layers_brightness_input = {nullptr};
     ::ComboBox * m_network_version_combo     = {nullptr};
+    ::ComboBox * m_ai_backend_combo          = {nullptr};
+    ::TextInput *m_ai_model_input            = {nullptr};
+    ::TextInput *m_ai_endpoint_input         = {nullptr};
+    ::TextInput *m_ai_api_key_input          = {nullptr};
+    ::Button *m_ai_test_connection_btn       = {nullptr};
+    ::ComboBox * m_ai_permission_combo       = {nullptr};
+    ::SpinInput *m_ai_max_messages_input     = {nullptr};
+    ::SpinInput *m_ai_max_kb_input           = {nullptr};
     std::vector<NetworkLibraryVersionInfo> m_available_versions;
 
     wxString m_developer_mode_def;
@@ -103,6 +111,7 @@ public:
     wxBoxSizer *create_item_auto_reslice(wxString title, wxString checkbox_tooltip, wxString delay_tooltip);
     wxBoxSizer *create_item_bambu_cloud(wxString title, wxString tooltip);
     wxBoxSizer *create_item_network_plugin_version(wxString title, wxString tooltip);
+    wxBoxSizer *create_item_ai_assistant(wxString title, wxString tooltip);
 #ifdef WIN32
     wxBoxSizer *create_item_link_association(wxString url_prefix, wxString website_name);
 #endif // WIN32
@@ -110,6 +119,7 @@ public:
     void create_items();
     void create_sync_page();
     wxBoxSizer* create_debug_page();
+    wxBoxSizer* create_ai_page();
 
     void UpdateSidebarLayout();
 

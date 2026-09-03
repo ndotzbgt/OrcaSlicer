@@ -33,6 +33,33 @@ set(SLIC3R_GUI_SOURCES
     GUI/AMSDryControl.hpp
     GUI/AmsWidgets.cpp
     GUI/AmsWidgets.hpp
+    GUI/AIHelper/AIEngine.hpp
+    GUI/AIHelper/AIEngine.cpp
+    GUI/AIHelper/AIGeminiEngine.hpp
+    GUI/AIHelper/AIGeminiEngine.cpp
+    GUI/AIHelper/AIOllamaEngine.hpp
+    GUI/AIHelper/AIOllamaEngine.cpp
+    GUI/AIHelper/OpenAICompatEngine.hpp
+    GUI/AIHelper/OpenAICompatEngine.cpp
+    GUI/AIHelper/AIEngineFactory.hpp
+    GUI/AIHelper/AIEngineFactory.cpp
+    GUI/AIHelper/AIFallback.hpp
+    GUI/AIHelper/AIFallback.cpp
+    GUI/AIHelper/AIContext.hpp
+    GUI/AIHelper/AIContext.cpp
+    GUI/AIHelper/AISessionManager.hpp
+    GUI/AIHelper/AISessionManager.cpp
+    GUI/AIHelper/AIPermissionDialog.hpp
+    GUI/AIHelper/AIPermissionDialog.cpp
+    GUI/AIHelper/AIActionConfirmDialog.hpp
+    GUI/AIHelper/AIActionConfirmDialog.cpp
+    GUI/AIHelper/AIHelper.hpp
+    GUI/AIHelper/AIHelper.cpp
+    GUI/AIHelper/AIHelperIcons.hpp
+    GUI/AIHelper/AIHelperIcons.cpp
+    GUI/AIHelper/SSEParser.hpp
+    GUI/AIHelper/SSEParser.cpp
+    GUI/AIHelper/Keychain.cpp
     GUI/Auxiliary.cpp
     GUI/AuxiliaryDataViewModel.cpp
     GUI/AuxiliaryDataViewModel.hpp
@@ -870,6 +897,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     FIND_LIBRARY(WAYLAND_EGL_LIBRARIES    NAMES wayland-egl)
     FIND_LIBRARY(WAYLAND_CLIENT_LIBRARIES NAMES wayland-client)
     find_package(CURL REQUIRED)
+    find_package(nlohmann_json REQUIRED)
     target_link_libraries(libslic3r_gui
         OpenGL::EGL
         ${DBUS_LIBRARIES}

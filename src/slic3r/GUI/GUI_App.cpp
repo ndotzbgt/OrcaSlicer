@@ -10023,5 +10023,34 @@ bool is_support_filament(int extruder_id, bool strict_check)
     return support_option->get_at(0);
 };
 
+void GUI_App::initialize_ai_helper()
+{
+    if (!mainframe || !mainframe->ai_helper()) return;
+
+    std::string backend = app_config->get("ai", "backend");
+    std::string api_key;
+    std::string model = app_config->get("ai", "model");
+    std::string endpoint = app_config->get("ai", "endpoint");
+    std::string permission = app_config->get("ai", "permission_level");
+
+    // Try to retrieve API key from platform keychain
+    if (auto stored = Keychain::retrieve("OrcaSlicer", "ai_api_key")) {
+        api_key = *stored;
+    } else {
+        // Fallback to plaintext config (for migration)
+        api_key = app_config->get("ai", "api_key");
+    }
+
+    if (permission == "deny") {
+        return;
+    }
+
+    if (backend.empty()) backend = "gemini";
+    if (model.empty()) model = "gemini-2.5-flash";
+
+    auto engine = AIEngineFactory::create_from_config(backend, api_key, model, endpoint);
+    mainframe->ai_helper()->set_engine(engine);
+}
+
 } // GUI
 } //Slic3r

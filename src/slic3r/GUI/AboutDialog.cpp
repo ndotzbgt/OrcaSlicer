@@ -331,6 +331,7 @@ AboutDialog::AboutDialog()
               "<html>"
               "<body bgcolor= \"" + bgr_clr_str + "\" >"
               "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"https://www.orcaslicer.com\">https://www.orcaslicer.com</ a></p>"
+              "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"preferences:ai\">" + _u8L(_L("Configure AI Assistant")) + "</a></p>"
               "</body>"
               "</html>")
             ).str());
@@ -386,7 +387,13 @@ void AboutDialog::on_dpi_changed(const wxRect &suggested_rect)
 
 void AboutDialog::onLinkClicked(wxHtmlLinkEvent &event)
 {
-    wxGetApp().open_browser_with_warning_dialog(event.GetLinkInfo().GetHref());
+    wxString href = event.GetLinkInfo().GetHref();
+    if (href.StartsWith("preferences:")) {
+        wxString page = href.AfterFirst(':');
+        wxGetApp().open_preferences(0, page.ToStdString());
+    } else {
+        wxGetApp().open_browser_with_warning_dialog(href);
+    }
     event.Skip(false);
 }
 

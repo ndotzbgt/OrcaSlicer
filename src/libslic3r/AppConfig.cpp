@@ -277,6 +277,24 @@ void AppConfig::set_defaults()
             fps_cap = 0;
         }
         fps_cap = std::max(0, std::min(fps_cap, 240));
+
+    // AI Assistant defaults
+    if (get("ai", "enabled").empty())
+        set("ai", "enabled", "true");
+    if (get("ai", "backend").empty())
+        set("ai", "backend", "gemini");
+    if (get("ai", "model").empty())
+        set("ai", "model", "gemini-2.5-flash");
+    if (get("ai", "endpoint").empty())
+        set("ai", "endpoint", "");
+    if (get("ai", "api_key").empty())
+        set("ai", "api_key", "");
+    if (get("ai", "permission_level").empty())
+        set("ai", "permission_level", "cloud");
+    if (get("ai", "max_messages").empty())
+        set("ai", "max_messages", "100");
+    if (get("ai", "max_kb").empty())
+        set("ai", "max_kb", "500");
         set(SETTING_OPENGL_FPS_CAP, std::to_string(fps_cap));
     }
 

@@ -93,6 +93,11 @@ wxDEFINE_EVENT(EVT_SHOW_IP_DIALOG, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_MACHINE_LIST, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_PRESET_CB, SimpleEvent);
 
+wxDEFINE_EVENT(EVT_AI_HELPER_TOGGLE, wxCommandEvent);
+wxDEFINE_EVENT(EVT_AI_CHAT_START, wxCommandEvent);
+wxDEFINE_EVENT(EVT_AI_CHAT_END, wxCommandEvent);
+wxDEFINE_EVENT(EVT_AI_CHAT_MESSAGE, wxCommandEvent);
+wxDEFINE_EVENT(EVT_AI_ACTION_CONFIRM, wxCommandEvent);
 
 
 // BBS: backup
@@ -412,61 +417,52 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     else
         init_menubar_as_editor();
 
-    // BBS
-#if 0
-    // This is needed on Windows to fake the CTRL+# of the window menu when using the numpad
-    wxAcceleratorEntry entries[6];
-    entries[0].Set(wxACCEL_CTRL, WXK_NUMPAD1, wxID_HIGHEST + 1);
-    entries[1].Set(wxACCEL_CTRL, WXK_NUMPAD2, wxID_HIGHEST + 2);
-    entries[2].Set(wxACCEL_CTRL, WXK_NUMPAD3, wxID_HIGHEST + 3);
-    entries[3].Set(wxACCEL_CTRL, WXK_NUMPAD4, wxID_HIGHEST + 4);
-    entries[4].Set(wxACCEL_CTRL, WXK_NUMPAD5, wxID_HIGHEST + 5);
-    entries[5].Set(wxACCEL_CTRL, WXK_NUMPAD6, wxID_HIGHEST + 6);
-    wxAcceleratorTable accel(6, entries);
+    // Accelerator table for keyboard shortcuts
+    wxAcceleratorEntry entries[14];
+    int index = 0;
+    entries[index++].Set(wxACCEL_CTRL, (int)'N', wxID_HIGHEST + wxID_NEW);
+    entries[index++].Set(wxACCEL_CTRL, (int)'O', wxID_HIGHEST + wxID_OPEN);
+    entries[index++].Set(wxACCEL_CTRL, (int)'S', wxID_HIGHEST + wxID_SAVE);
+    entries[index++].Set(wxACCEL_CTRL | wxACCEL_SHIFT, (int)'S', wxID_HIGHEST + wxID_SAVEAS);
+    entries[index++].Set(wxACCEL_CTRL, (int)'X', wxID_HIGHEST + wxID_CUT);
+    entries[index++].Set(wxACCEL_CTRL, (int)'A', wxID_HIGHEST + wxID_SELECTALL);
+    entries[index++].Set(wxACCEL_NORMAL, (int)27, wxID_HIGHEST + wxID_CANCEL);
+    entries[index++].Set(wxACCEL_CTRL, (int)'Z', wxID_HIGHEST + wxID_UNDO);
+    entries[index++].Set(wxACCEL_CTRL, (int)'Y', wxID_HIGHEST + wxID_REDO);
+    entries[index++].Set(wxACCEL_CTRL, (int)'C', wxID_HIGHEST + wxID_COPY);
+    entries[index++].Set(wxACCEL_CTRL, (int)'V', wxID_HIGHEST + wxID_PASTE);
+    entries[index++].Set(wxACCEL_CTRL, (int)'P', wxID_HIGHEST + wxID_PREFERENCES);
+    // AI Assistant toggle: Ctrl+Shift+I
+    entries[index++].Set(wxACCEL_CTRL | wxACCEL_SHIFT, (int)'I', wxID_HIGHEST + wxID_FILE6);
+    wxAcceleratorTable accel(index, entries);
     SetAcceleratorTable(accel);
-#endif // _WIN32
 
-    // BBS
-    //wxAcceleratorEntry entries[13];
-    //int index = 0;
-    //entries[index++].Set(wxACCEL_CTRL, (int)'N', wxID_HIGHEST + wxID_NEW);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'O', wxID_HIGHEST + wxID_OPEN);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'S', wxID_HIGHEST + wxID_SAVE);
-    //entries[index++].Set(wxACCEL_CTRL | wxACCEL_SHIFT, (int)'S', wxID_HIGHEST + wxID_SAVEAS);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'X', wxID_HIGHEST + wxID_CUT);
-    ////entries[index++].Set(wxACCEL_CTRL, (int)'I', wxID_HIGHEST + wxID_ADD);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'A', wxID_HIGHEST + wxID_SELECTALL);
-    //entries[index++].Set(wxACCEL_NORMAL, (int)27 /* escape */, wxID_HIGHEST + wxID_CANCEL);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'Z', wxID_HIGHEST + wxID_UNDO);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'Y', wxID_HIGHEST + wxID_REDO);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'C', wxID_HIGHEST + wxID_COPY);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'V', wxID_HIGHEST + wxID_PASTE);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'P', wxID_HIGHEST + wxID_PREFERENCES);
-    //entries[index++].Set(wxACCEL_CTRL, (int)'I', wxID_HIGHEST + wxID_FILE6);
-    //wxAcceleratorTable accel(sizeof(entries) / sizeof(entries[0]), entries);
-    //SetAcceleratorTable(accel);
-
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->new_project(); }, wxID_HIGHEST + wxID_NEW);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->load_project(); }, wxID_HIGHEST + wxID_OPEN);
-    //// BBS: close save project
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { if (m_plater) m_plater->save_project(); }, wxID_HIGHEST + wxID_SAVE);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { if (m_plater) m_plater->save_project(true); }, wxID_HIGHEST + wxID_SAVEAS);
-    ////Bind(wxEVT_MENU, [this](wxCommandEvent&) { if (m_plater) m_plater->add_model(); }, wxID_HIGHEST + wxID_ADD);
-    ////Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->remove_selected(); }, wxID_HIGHEST + wxID_DELETE);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) {
-    //        if (!can_add_models())
-    //            return;
-    //        if (m_plater) {
-    //            m_plater->add_model();
-    //        }
-    //    }, wxID_HIGHEST + wxID_FILE6);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->select_all(); }, wxID_HIGHEST + wxID_SELECTALL);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->deselect_all(); }, wxID_HIGHEST + wxID_CANCEL);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) {
-    //    if (m_plater->is_view3D_shown())
-    //        m_plater->undo();
-    //    }, wxID_HIGHEST + wxID_UNDO);
-    //Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->new_project(); }, wxID_HIGHEST + wxID_NEW);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->load_project(); }, wxID_HIGHEST + wxID_OPEN);
+    // BBS: close save project
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { if (m_plater) m_plater->save_project(); }, wxID_HIGHEST + wxID_SAVE);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { if (m_plater) m_plater->save_project(true); }, wxID_HIGHEST + wxID_SAVEAS);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+            if (!can_add_models())
+                return;
+            if (m_plater) {
+                m_plater->add_model();
+            }
+        }, wxID_HIGHEST + wxID_FILE6);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->select_all(); }, wxID_HIGHEST + wxID_SELECTALL);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->deselect_all(); }, wxID_HIGHEST + wxID_CANCEL);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+        if (m_plater->is_view3D_shown())
+            m_plater->undo();
+        }, wxID_HIGHEST + wxID_UNDO);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+        if (m_plater->is_view3D_shown())
+            m_plater->redo();
+        }, wxID_HIGHEST + wxID_REDO);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->copy_selection_to_clipboard(); }, wxID_HIGHEST + wxID_COPY);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { m_plater->paste_from_clipboard(); }, wxID_HIGHEST + wxID_PASTE);
+    // AI Assistant toggle
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { toggle_ai_helper(); }, wxID_HIGHEST + wxID_FILE6);
     //    if (m_plater->is_view3D_shown())
     //        m_plater->redo();
     //    }, wxID_HIGHEST + wxID_REDO);
@@ -1339,6 +1335,10 @@ void MainFrame::init_tabpanel() {
     m_calibration = new CalibrationPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_calibration->SetBackgroundColour(*wxWHITE);
     m_tabpanel->AddPage(TAB_ID_CALIBRATION, m_calibration, _L("Calibration"), "tab_calibration_active");
+
+    // AI Helper panel (initially hidden)
+    m_ai_helper = new AIHelper(this);
+    m_ai_helper->Hide();
 
     // Plugin pages are appended after the built-in tabs; their ids are namespaced
     // (plugin.<plugin_key>.<name>) so they can't collide with the built-in TAB_ID_* constants.
@@ -3214,20 +3214,11 @@ void MainFrame::init_menubar_as_editor()
             this, [this]() { return m_tabpanel->GetSelectedPageName() == TAB_ID_PREPARE; },
             [this]() { return wxGetApp().show_outline(); }, this);
 
-        /*viewMenu->AppendSeparator();
-        append_menu_check_item(viewMenu, wxID_ANY, _L("Show &Wireframe") + "\t" + ctrl + shift + _L("Enter"), _L("Show wireframes in 3D scene."),
-            [this](wxCommandEvent&) { m_plater->toggle_show_wireframe(); m_plater->get_current_canvas3D()->post_event(SimpleEvent(wxEVT_PAINT)); }, this,
-            [this]() { return m_plater->is_wireframe_enabled(); }, [this]() { return m_plater->is_show_wireframe(); }, this);*/
-
-        //viewMenu->AppendSeparator();
-        ////BBS orthogonal view
-        //append_menu_check_item(viewMenu, wxID_ANY, _L("Show Edges(TODO)"), _L("Show Edges."),
-        //    [this](wxCommandEvent& evt) {
-        //        wxGetApp().app_config->set("show_build_edges", evt.GetInt() == 1 ? "true" : "false");
-        //    }, nullptr, [this]() {return can_select(); }, [this]() {
-        //        std::string show_build_edges = wxGetApp().app_config->get("show_build_edges");
-        //        return show_build_edges.compare("true") == 0;
-        //    }, this);
+        viewMenu->AppendSeparator();
+        append_menu_check_item(
+            viewMenu, wxID_ANY, _L("AI Assistant") + "\t" + ctrl + shift + "I", _L("Toggle AI Assistant panel"),
+            [this](wxCommandEvent&) { toggle_ai_helper(); }, this,
+            [this]() { return true; }, [this]() { return m_ai_helper && m_ai_helper->IsShown(); }, this);
     }
 
     wxWindowID config_id_base = wxWindow::NewControlId(int(ConfigMenuCnt));
@@ -4565,6 +4556,19 @@ void SettingsDialog::on_dpi_changed(const wxRect& suggested_rect)
     SetMinSize(size);
     Fit();
     Refresh();
+}
+
+void MainFrame::toggle_ai_helper()
+{
+    if (m_ai_helper) {
+        bool visible = !m_ai_helper->IsShown();
+        m_ai_helper->Show(visible);
+        m_ai_helper->set_visible(visible);
+        Layout();
+        if (visible && m_ai_helper->get_engine() == nullptr) {
+            wxGetApp().initialize_ai_helper();
+        }
+    }
 }
 
 

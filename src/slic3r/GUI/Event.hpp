@@ -108,6 +108,41 @@ private:
     wxString m_APIkey;
 
 };
+
+class AIHelperEvent : public wxCommandEvent
+{
+public:
+    AIHelperEvent(wxEventType commandType = wxEVT_NULL, int winid = 0)
+        : wxCommandEvent(commandType, winid)
+    {}
+
+    AIHelperEvent(const AIHelperEvent& event)
+        : wxCommandEvent(event)
+    {}
+
+    virtual wxEvent *Clone() const wxOVERRIDE { return new AIHelperEvent(*this); }
+};
+
+class AIChatEvent : public wxCommandEvent
+{
+public:
+    AIChatEvent(wxEventType commandType = wxEVT_NULL, int winid = 0)
+        : wxCommandEvent(commandType, winid)
+    {}
+
+    AIChatEvent(const AIChatEvent& event)
+        : wxCommandEvent(event)
+    {}
+
+    virtual wxEvent *Clone() const wxOVERRIDE { return new AIChatEvent(*this); }
+};
+
+wxDECLARE_EVENT(EVT_AI_HELPER_TOGGLE, wxCommandEvent);
+wxDECLARE_EVENT(EVT_AI_CHAT_START, wxCommandEvent);
+wxDECLARE_EVENT(EVT_AI_CHAT_END, wxCommandEvent);
+wxDECLARE_EVENT(EVT_AI_CHAT_MESSAGE, wxCommandEvent);
+wxDECLARE_EVENT(EVT_AI_ACTION_CONFIRM, wxCommandEvent);
+
 }
 }
 

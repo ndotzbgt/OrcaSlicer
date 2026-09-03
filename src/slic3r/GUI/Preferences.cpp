@@ -1532,6 +1532,34 @@ PreferencesDialog::~PreferencesDialog()
 {
 }
 
+void PreferencesDialog::on_ai_test_connection()
+{
+    if (!m_ai_backend_combo || !m_ai_model_input || !m_ai_api_key_input || !m_ai_endpoint_input) {
+        wxMessageBox(_L("AI settings not initialized"), _L("Error"));
+        return;
+    }
+
+    std::string backend = m_ai_backend_combo->GetStringSelection().ToStdString();
+    std::string model = m_ai_model_input->GetValue().ToStdString();
+    std::string api_key = m_ai_api_key_input->GetValue().ToStdString();
+    std::string endpoint = m_ai_endpoint_input->GetValue().ToStdString();
+
+    std::string backend_key = "gemini";
+    if (backend == _L("Ollama (Local)")) backend_key = "ollama";
+    else if (backend == _L("OpenAI Compatible")) backend_key = "openai_compat";
+
+    auto engine = AIEngineFactory::create_from_config(backend_key, api_key, model, endpoint);
+
+    wxBusyInfo wait(_L("Testing connection..."));
+    wxTheApp->Yield();
+
+    std::string result = engine->test_connection();
+
+    wxGetApp().CallAfter([result, this]() {
+        wxMessageBox(from_u8(result), _L("Connection Test"));
+    });
+}
+
 void PreferencesDialog::on_dpi_changed(const wxRect &suggested_rect) {
     m_pref_tabs->Rescale();
 
@@ -2039,6 +2067,101 @@ void PreferencesDialog::create_items()
 
     auto item_plugin_version = create_item_network_plugin_version(_L("Network plug-in version"), _L("Select the network plug-in version to use"));
     g_sizer->Add(item_plugin_version);
+
+    g_sizer->AddSpacer(FromDIP(10));
+    sizer_page->Add(g_sizer, 0, wxEXPAND);
+
+    //////////////////////////
+    //// AI ASSISTANT TAB
+    /////////////////////////////////////
+    m_pref_tabs->AppendItem(_L("AI Assistant"));
+    f_sizers.push_back(new wxFlexGridSizer(1, 1, v_gap, 0));
+    g_sizer = f_sizers.back();
+    g_sizer->AddGrowableCol(0, 1);
+
+    //// AI > Backend
+    g_sizer->Add(create_item_title(_L("AI Backend")), 1, wxEXPAND);
+
+    auto item_ai_backend = create_item_combobox(
+        _L("Backend"),
+        _L("Select the AI provider to use for the assistant."),
+        "ai/backend",
+        {_L("Gemini (Google)"), _L("Ollama (Local)"), _L("OpenAI Compatible")},
+        {"gemini", "ollama", "openai_compat"});
+    m_ai_backend_combo = std::get<1>(item_ai_backend);
+    g_sizer->Add(item_ai_backend);
+
+    auto item_ai_model = create_item_input(
+        _L("Model"),
+        _L("Model name (e.g., gemini-2.5-flash, llama3.2, gpt-4o-mini)"),
+        "ai/model");
+    m_ai_model_input = std::get<1>(item_ai_model);
+    g_sizer->Add(item_ai_model);
+
+    auto item_ai_endpoint = create_item_input(
+        _L("Endpoint"),
+        _L("API endpoint URL (leave empty for default)"),
+        "ai/endpoint");
+    m_ai_endpoint_input = std::get<1>(item_ai_endpoint);
+    g_sizer->Add(item_ai_endpoint);
+
+    auto item_ai_api_key = create_item_input(
+        _L("API Key"),
+        _L("Your API key for the selected backend (not needed for Ollama)"),
+        "ai/api_key");
+    m_ai_api_key_input = std::get<1>(item_ai_api_key);
+    if (m_ai_api_key_input) m_ai_api_key_input->SetWindowStyleFlag(m_ai_api_key_input->GetWindowStyleFlag() | wxTE_PASSWORD);
+    g_sizer->Add(item_ai_api_key);
+
+    auto item_ai_test = create_item_button(
+        _L("Test Connection"),
+        _L("Test"), "",
+        _L("Test the configured AI backend connection"),
+        [this]() { on_ai_test_connection(); });
+    m_ai_test_connection_btn = std::get<1>(item_ai_test);
+    g_sizer->Add(item_ai_test);
+
+    //// AI > Privacy
+    g_sizer->Add(create_item_title(_L("Privacy")), 1, wxEXPAND);
+
+    auto item_ai_permission = create_item_combobox(
+        _L("Processing Mode"),
+        _L("Choose how your queries are processed."),
+        "ai/permission_level",
+        {_L("Cloud AI (Recommended)"), _L("Local Only (Offline)"), _L("Disabled")},
+        {"cloud", "local", "deny"});
+    m_ai_permission_combo = std::get<1>(item_ai_permission);
+    g_sizer->Add(item_ai_permission);
+
+    auto item_ai_privacy_note = create_item_title(_L("API keys are stored securely in your system keychain. Conversation history is saved per-project as a companion file."));
+    g_sizer->Add(item_ai_privacy_note);
+
+    //// AI > Session History Limits
+    g_sizer->Add(create_item_title(_L("Session History Limits")), 1, wxEXPAND);
+
+    auto item_ai_max_messages = create_item_spinctrl(
+        _L("Max messages"),
+        _L("Maximum number of messages to keep in session history (0 = unlimited)"),
+        "ai/max_messages",
+        0, 10000,
+        [this](int value) {
+            if (m_ai_max_messages_input) m_ai_max_messages_input->SetValue(value);
+        },
+        _L("Older messages are automatically removed when this limit is reached."));
+    m_ai_max_messages_input = std::get<1>(item_ai_max_messages);
+    g_sizer->Add(item_ai_max_messages);
+
+    auto item_ai_max_kb = create_item_spinctrl(
+        _L("Max storage (KB)"),
+        _L("Maximum storage for session history in kilobytes (0 = unlimited)"),
+        "ai/max_kb",
+        0, 10000,
+        [this](int value) {
+            if (m_ai_max_kb_input) m_ai_max_kb_input->SetValue(value);
+        },
+        _L("Older messages are automatically removed when this limit is reached."));
+    m_ai_max_kb_input = std::get<1>(item_ai_max_kb);
+    g_sizer->Add(item_ai_max_kb);
 
     g_sizer->AddSpacer(FromDIP(10));
     sizer_page->Add(g_sizer, 0, wxEXPAND);
