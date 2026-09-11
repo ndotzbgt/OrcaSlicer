@@ -905,13 +905,18 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         ${WAYLAND_EGL_LIBRARIES}
         ${WAYLAND_CLIENT_LIBRARIES}
         ${CURL_LIBRARIES}
+        nlohmann_json::nlohmann_json
     )
 elseif (APPLE)
+    find_package(nlohmann_json REQUIRED)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
-        target_link_libraries(libslic3r_gui ${DISKARBITRATION_LIBRARY} "-framework Security" "-framework OpenGL")
+        target_link_libraries(libslic3r_gui ${DISKARBITRATION_LIBRARY} "-framework Security" "-framework OpenGL" nlohmann_json::nlohmann_json)
     else()
-        target_link_libraries(libslic3r_gui ${DISKARBITRATION_LIBRARY} "-framework Security")
+        target_link_libraries(libslic3r_gui ${DISKARBITRATION_LIBRARY} "-framework Security" nlohmann_json::nlohmann_json)
     endif()
+elseif (WIN32)
+    find_package(nlohmann_json REQUIRED)
+    target_link_libraries(libslic3r_gui nlohmann_json::nlohmann_json)
 endif()
 
 if (SLIC3R_STATIC)

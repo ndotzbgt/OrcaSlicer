@@ -353,6 +353,7 @@ set(DEP_Boost_COMPONENTS system iostreams filesystem thread log locale regex dat
 include(Boost/Boost.cmake)
 
 include(Cereal/Cereal.cmake)
+include(nlohmann_json/nlohmann_json.cmake)
 include(Qhull/Qhull.cmake)
 include(GLEW/GLEW.cmake)
 
