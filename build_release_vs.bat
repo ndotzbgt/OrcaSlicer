@@ -167,14 +167,21 @@ cd %WP%
 mkdir %build_dir%
 cd %build_dir%
 
+REM Compute deps build path for DEP_BUILD_DIR so CMakeLists.txt sets correct CMAKE_PREFIX_PATH
+if "%arch%"=="ARM64" (
+    set DEPS_BUILD_DIR=%WP%\deps\build-arm64
+) else (
+    set DEPS_BUILD_DIR=%WP%\deps\build
+)
+
 echo on
 set CMAKE_POLICY_VERSION_MINIMUM=3.5
 if "%USE_NINJA%"=="1" (
-    cmake .. -G %CMAKE_GENERATOR% %CLANG_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type%
+    cmake .. -G %CMAKE_GENERATOR% %CLANG_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type% -DDEP_BUILD_DIR="%DEPS_BUILD_DIR%"
     cmake --build . --config %build_type% --target all
     cmake --build . --config %build_type% --target generate_system_cache
 ) else (
-    cmake .. -G %CMAKE_GENERATOR% -A %arch% %TOOLSET_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type%
+    cmake .. -G %CMAKE_GENERATOR% -A %arch% %TOOLSET_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type% -DDEP_BUILD_DIR="%DEPS_BUILD_DIR%"
     cmake --build . --config %build_type% --target ALL_BUILD -- -m
     cmake --build . --config %build_type% --target generate_system_cache
 )
