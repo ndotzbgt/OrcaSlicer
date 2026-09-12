@@ -69,9 +69,16 @@ cd %WP%
 mkdir %build_dir%
 cd %build_dir%
 
+REM Compute deps build path for DEP_BUILD_DIR so CMakeLists.txt sets correct CMAKE_PREFIX_PATH
+if "%arch%"=="ARM64" (
+    set DEPS_BUILD_DIR=%WP%\deps\build-arm64
+) else (
+    set DEPS_BUILD_DIR=%WP%\deps\build
+)
+
 echo on
 set CMAKE_POLICY_VERSION_MINIMUM=3.5
-cmake .. -G "Visual Studio 17 2022" -A %arch% -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
+cmake .. -G "Visual Studio 17 2022" -A %arch% -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type% -DDEP_BUILD_DIR="%DEPS_BUILD_DIR%"
 cmake --build . --config %build_type% --target ALL_BUILD -- -m
 cmake --build . --config %build_type% --target generate_system_cache
 @echo off
