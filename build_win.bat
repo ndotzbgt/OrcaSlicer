@@ -661,6 +661,9 @@ if "%build_slicer%" == "ON" (
     call :print_and_run cmake --build "%build_dir%" --config %build_type% %SLICER_TARGET_FLAG% %JOBS_FLAG% %VERBOSE_FLAG%
     %error_check%
 
+    call :print_and_run cmake --build "%build_dir%" --config %build_type% --target generate_system_cache
+    %error_check%
+
     if "%run_tests%" == "ON" (
         call :print_and_run ctest --test-dir "%build_dir%/tests" -C %build_type% --output-on-failure
         %error_check%

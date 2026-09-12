@@ -45,6 +45,12 @@ if "%USE_NINJA%"=="1" (
     goto :generator_ready
 )
 
+@REM Check for ORCA_TOOLS option (-t)
+set ORCA_TOOLS_FLAG=
+for %%a in (%*) do (
+    if "%%a"=="-t" set ORCA_TOOLS_FLAG=-DORCA_TOOLS=ON
+)
+
 @REM Detect Visual Studio version using msbuild
 echo Detecting Visual Studio version using msbuild...
 
@@ -166,9 +172,11 @@ set CMAKE_POLICY_VERSION_MINIMUM=3.5
 if "%USE_NINJA%"=="1" (
     cmake .. -G %CMAKE_GENERATOR% %CLANG_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target all
+    cmake --build . --config %build_type% --target generate_system_cache
 ) else (
     cmake .. -G %CMAKE_GENERATOR% -A %arch% %TOOLSET_ARG% -DORCA_TOOLS=ON %SIG_FLAG% -DBUILD_TESTS=%BUILD_TESTS% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target ALL_BUILD -- -m
+    cmake --build . --config %build_type% --target generate_system_cache
 )
 @echo off
 cd ..

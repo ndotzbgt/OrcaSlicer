@@ -267,6 +267,7 @@ function build_slicer() {
                     ${CMAKE_POLICY_COMPAT}
             fi
             cmake --build . --config "$BUILD_CONFIG" --target "$SLICER_BUILD_TARGET"
+            cmake --build . --config "$BUILD_CONFIG" --target generate_system_cache
         )
 
         # -T also runs the tests; ORCA_TESTS_BUILD_ONLY=1 builds them without
