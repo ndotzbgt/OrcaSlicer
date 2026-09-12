@@ -32,9 +32,15 @@ setlocal enabledelayedexpansion
 set "REPO_ROOT=%~dp0.."
 
 set "PRUNE_SOURCE="
+set "NO_BUILD="
 :parse_flags
 if /i "%~1"=="--prune-source" (
     set "PRUNE_SOURCE=1"
+    shift
+    goto :parse_flags
+)
+if /i "%~1"=="-n" (
+    set "NO_BUILD=1"
     shift
     goto :parse_flags
 )
@@ -56,17 +62,25 @@ if not defined CONFIG (
 )
 if not defined CONFIG set "CONFIG=Release"
 
-echo Building generate_system_cache in %BUILD_DIR% (%CONFIG%)
-cmake --build "%BUILD_DIR%" --config %CONFIG% --target generate_system_cache
-if errorlevel 1 (
-    echo ERROR: could not build generate_system_cache - configure the build tree with -DORCA_TOOLS=ON: 1>&2
-    echo        cmake -S "%REPO_ROOT%" -B "%BUILD_DIR%" -DORCA_TOOLS=ON 1>&2
-    exit /b 1
-)
-call :find_tool
-if not defined TOOL (
-    echo ERROR: generate_system_cache.exe not found under %BUILD_DIR% - build with -DORCA_TOOLS=ON 1>&2
-    exit /b 1
+if not defined NO_BUILD (
+    echo Building generate_system_cache in %BUILD_DIR% (%CONFIG%)
+    cmake --build "%BUILD_DIR%" --config %CONFIG% --target generate_system_cache
+    if errorlevel 1 (
+        echo ERROR: could not build generate_system_cache - configure the build tree with -DORCA_TOOLS=ON: 1>&2
+        echo        cmake -S "%REPO_ROOT%" -B "%BUILD_DIR%" -DORCA_TOOLS=ON 1>&2
+        exit /b 1
+    )
+    call :find_tool
+    if not defined TOOL (
+        echo ERROR: generate_system_cache.exe not found under %BUILD_DIR% - build with -DORCA_TOOLS=ON 1>&2
+        exit /b 1
+    )
+) else (
+    call :find_tool
+    if not defined TOOL (
+        echo ERROR: generate_system_cache.exe not found under %BUILD_DIR% - build with -DORCA_TOOLS=ON 1>&2
+        exit /b 1
+    )
 )
 
 set "PROFILES=%REPO_ROOT%\resources\profiles"
