@@ -458,6 +458,7 @@ set(_dep_list
     ${ZLIB_PKG}
     ${EXPAT_PKG}
     dep_libnoise
+    dep_nlohmann_json
     dep_python3
     dep_wxInspector
     dep_FFMPEG
