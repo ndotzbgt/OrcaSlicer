@@ -10,6 +10,8 @@
 #include "GLCanvas3D.hpp"
 #include "WxFontUtils.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <wx/sizer.h>
 #include <wx/textctrl.h>
 #include <wx/button.h>
