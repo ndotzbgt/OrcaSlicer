@@ -155,19 +155,17 @@ bool keychain_erase_mac() {
 
 #else
 bool keychain_store_linux(const std::string& secret) {
-    SecretSchema schema = {
+    SecretSchema* schema = secret_schema_new(
         "org.orcaslicer.ai.apikey",
         SECRET_SCHEMA_NONE,
-        {
-            { "service", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { "account", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING }
-        }
-    };
+        "service", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        "account", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        nullptr
+    );
 
     GError* error = nullptr;
     bool success = secret_password_store_sync(
-        &schema,
+        schema,
         nullptr, // default collection
         nullptr, // cancellable
         &error,
@@ -177,6 +175,8 @@ bool keychain_store_linux(const std::string& secret) {
         nullptr
     );
 
+    secret_schema_unref(schema);
+
     if (error) {
         g_error_free(error);
     }
@@ -184,19 +184,17 @@ bool keychain_store_linux(const std::string& secret) {
 }
 
 std::optional<std::string> keychain_retrieve_linux() {
-    SecretSchema schema = {
+    SecretSchema* schema = secret_schema_new(
         "org.orcaslicer.ai.apikey",
         SECRET_SCHEMA_NONE,
-        {
-            { "service", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { "account", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING }
-        }
-    };
+        "service", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        "account", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        nullptr
+    );
 
     GError* error = nullptr;
     gchar* secret = secret_password_lookup_sync(
-        &schema,
+        schema,
         nullptr, // default collection
         nullptr, // cancellable
         &error,
@@ -204,6 +202,8 @@ std::optional<std::string> keychain_retrieve_linux() {
         "account", account_name.c_str(),
         nullptr
     );
+
+    secret_schema_unref(schema);
 
     if (error) {
         g_error_free(error);
@@ -220,19 +220,17 @@ std::optional<std::string> keychain_retrieve_linux() {
 }
 
 bool keychain_erase_linux() {
-    SecretSchema schema = {
+    SecretSchema* schema = secret_schema_new(
         "org.orcaslicer.ai.apikey",
         SECRET_SCHEMA_NONE,
-        {
-            { "service", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { "account", SECRET_SCHEMA_ATTRIBUTE_STRING },
-            { nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING }
-        }
-    };
+        "service", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        "account", SECRET_SCHEMA_ATTRIBUTE_STRING,
+        nullptr
+    );
 
     GError* error = nullptr;
     bool success = secret_password_clear_sync(
-        &schema,
+        schema,
         nullptr, // default collection
         nullptr, // cancellable
         &error,
@@ -241,12 +239,13 @@ bool keychain_erase_linux() {
         nullptr
     );
 
+    secret_schema_unref(schema);
+
     if (error) {
         g_error_free(error);
     }
     return success;
 }
-
 #endif
 
 } // anonymous namespace

@@ -5,6 +5,7 @@
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
 #include "I18N.hpp"
+#include "GUI.hpp"
 #include "Widgets/WebView.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "GLCanvas3D.hpp"
