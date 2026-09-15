@@ -6,6 +6,7 @@
 #include <wx/thread.h>
 #include <wx/string.h>
 #include <boost/algorithm/string.hpp>
+#include <functional>
 
 namespace Slic3r {
 
@@ -95,34 +96,37 @@ void AIGeminiEngine::do_chat_stream(
 
     auto sse_parser = std::make_shared<SSEParser>(on_chunk);
 
-    auto perform_request = [this, url, payload, sse_parser, on_chunk, on_error, on_done, attempt](auto&& self) mutable {
+    // Use std::function for recursive calls to avoid lambda capture issues
+    std::function<void(int)> perform_request = [&](int current_attempt) {
+        auto sse_parser_local = std::make_shared<SSEParser>(on_chunk);
+
         auto http = Http::post(url)
             .header("Content-Type", "application/json")
             .header("x-goog-api-key", get_api_key())
             .set_post_body(payload.dump())
             .timeout_connect(10)
             .timeout_max(120)
-            .on_progress([sse_parser](Http::Progress prog, bool& cancel) {
+            .on_progress([sse_parser_local](Http::Progress prog, bool& cancel) {
                 if (!prog.buffer.empty()) {
-                    sse_parser->feed(prog.buffer);
+                    sse_parser_local->feed(prog.buffer);
                 }
             })
-            .on_complete([sse_parser, on_chunk, on_done](std::string body, unsigned status) {
-                sse_parser->finish();
+            .on_complete([sse_parser_local, on_chunk, on_done](std::string body, unsigned status) {
+                sse_parser_local->finish();
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([&, self](std::string body, std::string error, unsigned status) {
+            .on_error([this, &perform_request, sse_parser_local, on_chunk, on_error, on_done, current_attempt](std::string body, std::string error, unsigned status) {
                 // Retry on transient errors (429, 5xx, network errors)
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
-                if (retryable && attempt < 5) {
+                if (retryable && current_attempt < 5) {
                     // Exponential backoff: 1s, 2s, 4s, 8s, 16s
-                    int delay_ms = 1000 * (1 << attempt);
+                    int delay_ms = 1000 * (1 << current_attempt);
                     wxMilliSleep(delay_ms);
-                    sse_parser->reset();
-                    self(self);
+                    sse_parser_local->reset();
+                    perform_request(current_attempt + 1);
                 } else {
-                    sse_parser->reset();
+                    sse_parser_local->reset();
                     if (status >= 400) {
                         on_error("HTTP " + std::to_string(status) + ": " + body);
                     } else {
@@ -135,7 +139,7 @@ void AIGeminiEngine::do_chat_stream(
         http.perform();
     };
 
-    perform_request(perform_request);
+    perform_request(attempt);
 }
 
 } // namespace Slic3r
