@@ -70,11 +70,11 @@ void AIGeminiEngine::do_chat_stream(
         if (!msg.content.empty()) {
             parts.push_back({{"text", msg.content}});
         }
-        if (!msg.image_url.empty()) {
+        if (!msg.image_base64.empty()) {
             parts.push_back({
                 {"inline_data", {
                     {"mime_type", "image/png"},
-                    {"data", msg.image_url}
+                    {"data", msg.image_base64}
                 }}
             });
         }
@@ -112,7 +112,7 @@ void AIGeminiEngine::do_chat_stream(
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([sse_parser, on_error, on_done, self, url, payload, on_chunk, attempt](std::string body, std::string error, unsigned status) {
+            .on_error([&, self](std::string body, std::string error, unsigned status) {
                 // Retry on transient errors (429, 5xx, network errors)
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
                 if (retryable && attempt < 5) {

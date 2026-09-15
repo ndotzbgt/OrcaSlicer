@@ -63,14 +63,14 @@ void OpenAICompatEngine::do_chat_stream(
     for (const auto& msg : messages) {
         json m;
         m["role"] = msg.role;
-        if (!msg.image_url.empty()) {
+        if (!msg.image_base64.empty()) {
             json content = json::array();
             if (!msg.content.empty()) {
                 content.push_back({{"type", "text"}, {"text", msg.content}});
             }
             content.push_back({
                 {"type", "image_url"},
-                {"image_url", {{"url", "data:image/png;base64," + msg.image_url}}}
+                {"image_url", {{"url", "data:image/png;base64," + msg.image_base64}}}
             });
             m["content"] = content;
         } else {
@@ -106,7 +106,7 @@ void OpenAICompatEngine::do_chat_stream(
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([sse_parser, on_error, on_done, self, url, payload, on_chunk, attempt](std::string body, std::string error, unsigned status) {
+            .on_error([&, self](std::string body, std::string error, unsigned status) {
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
                 if (retryable && attempt < 5) {
                     int delay_ms = 1000 * (1 << attempt);

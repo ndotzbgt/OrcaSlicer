@@ -34,7 +34,8 @@ private:
         const std::vector<AIRequest>& messages,
         AIStreamCallback on_chunk,
         std::function<void(const std::string& error)> on_error,
-        std::function<void()> on_done);
+        std::function<void()> on_done,
+        int attempt = 0);
 };
 
 } // namespace Slic3r

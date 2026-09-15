@@ -61,8 +61,8 @@ void AIOllamaEngine::do_chat_stream(
         json m;
         m["role"] = msg.role;
         m["content"] = msg.content;
-        if (!msg.image_url.empty()) {
-            m["images"] = json::array({msg.image_url});
+        if (!msg.image_base64.empty()) {
+            m["images"] = json::array({msg.image_base64});
         }
         msgs.push_back(m);
     }
@@ -96,7 +96,7 @@ void AIOllamaEngine::do_chat_stream(
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([sse_parser, on_error, on_done, self, url, payload, on_chunk, attempt](std::string body, std::string error, unsigned status) {
+            .on_error([&, self](std::string body, std::string error, unsigned status) {
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
                 if (retryable && attempt < 5) {
                     int delay_ms = 1000 * (1 << attempt);
