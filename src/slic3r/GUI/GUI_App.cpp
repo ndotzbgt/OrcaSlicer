@@ -10023,6 +10023,11 @@ bool is_support_filament(int extruder_id, bool strict_check)
     return support_option->get_at(0);
 };
 
+void GUI_App::ai_helper() const
+{
+    return mainframe ? mainframe->ai_helper() : nullptr;
+}
+
 void GUI_App::initialize_ai_helper()
 {
     if (!mainframe || !mainframe->ai_helper()) return;

@@ -731,7 +731,7 @@ public:
 
     PrintHostJobQueue& printhost_job_queue() { return *m_printhost_job_queue.get(); }
 
-    AIHelper* ai_helper() const { return mainframe ? mainframe->ai_helper() : nullptr; }
+    AIHelper* ai_helper() const;
     void initialize_ai_helper();
 
     void            open_web_page_localized(const std::string &http_address);

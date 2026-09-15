@@ -11,6 +11,7 @@
 #include "AIEngine.hpp"
 #include "AISessionManager.hpp"
 #include "AIContext.hpp"
+#include "AIActionConfirmDialog.hpp"
 
 namespace Slic3r { namespace GUI {
 
