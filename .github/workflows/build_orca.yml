@@ -420,7 +420,7 @@ jobs:
         # the checkout cpack re-installs from when it builds the NSIS installer.
         # The generate_system_cache tool is now built as part of the main slicer build.
         # Use -n to skip rebuilding and just run the existing tool.
-        run: scripts\build_preset_cache.bat -n --prune-source "%BUILD_DIR%" "resources\profiles" "%BUILD_DIR%\OrcaSlicer\resources\profiles"
+        run: scripts\build_preset_cache.bat -n --prune-source "%BUILD_DIR%" "resources\profiles" "%BUILD_DIR%\resources\profiles"
 
       - name: Pack unit tests Win
         if: runner.os == 'Windows'
