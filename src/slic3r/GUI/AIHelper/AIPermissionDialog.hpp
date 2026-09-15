@@ -2,7 +2,7 @@
 #define slic3r_AIPermissionDialog_hpp_
 
 #include <wx/dialog.h>
-#include "GUI_Utils.hpp"
+#include "../GUI_Utils.hpp"
 
 namespace Slic3r { namespace GUI {
 
