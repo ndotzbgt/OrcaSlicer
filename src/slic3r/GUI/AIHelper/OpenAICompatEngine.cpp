@@ -94,7 +94,7 @@ void OpenAICompatEngine::do_chat_stream(
     std::function<void(int)> perform_request = [&](int current_attempt) {
         auto sse_parser_local = std::make_shared<SSEParser>(on_chunk);
 
-        auto http = Http::post(url)
+        Http::post(url)
             .header("Content-Type", "application/json")
             .header("Authorization", "Bearer " + get_api_key())
             .set_post_body(payload.dump())
@@ -126,9 +126,8 @@ void OpenAICompatEngine::do_chat_stream(
                     }
                     on_done();
                 }
-            });
-
-        http.perform();
+            })
+            .perform();
     };
 
     perform_request(attempt);
