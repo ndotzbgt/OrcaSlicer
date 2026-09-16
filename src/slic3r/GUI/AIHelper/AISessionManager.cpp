@@ -4,6 +4,7 @@
 
 #include <wx/datetime.h>
 #include <wx/filename.h>
+#include <wx/app.h>
 #include <fstream>
 #include <filesystem>
 

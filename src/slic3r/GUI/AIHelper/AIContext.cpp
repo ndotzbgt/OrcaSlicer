@@ -1,6 +1,6 @@
 #include "AIContext.hpp"
 #include "libslic3r/PrintConfig.hpp"
-#include "libslic3r/DynamicConfig.hpp"
+#include "libslic3r/Config.hpp"
 #include "libslic3r/Model.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
