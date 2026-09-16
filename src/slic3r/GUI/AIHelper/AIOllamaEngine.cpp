@@ -85,7 +85,7 @@ void AIOllamaEngine::do_chat_stream(
     std::function<void(int)> perform_request = [&](int current_attempt) {
         auto sse_parser_local = std::make_shared<SSEParser>(on_chunk);
 
-        auto http = Http::post(url)
+        Http::post(url)
             .header("Content-Type", "application/json")
             .set_post_body(payload.dump())
             .timeout_connect(5)
@@ -116,9 +116,8 @@ void AIOllamaEngine::do_chat_stream(
                     }
                     on_done();
                 }
-            });
-
-        http.perform();
+            })
+            .perform();
     };
 
     perform_request(attempt);
