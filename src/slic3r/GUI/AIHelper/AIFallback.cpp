@@ -140,7 +140,7 @@ static const std::vector<FallbackEntry> FALLBACK_KNOWLEDGE_BASE = {
     {
         {"z seam", "seam", "blob", "zipper", "vertical line"},
         "Z-seam control:\n"
-        '- Set "Z seam alignment" to "Random" or "Rear"\n'
+        "- Set \"Z seam alignment\" to \"Random\" or \"Rear\"\n"
         "- Enable coasting\n"
         "- Adjust retraction at layer change\n"
         "- Outer wall wipe distance\n"

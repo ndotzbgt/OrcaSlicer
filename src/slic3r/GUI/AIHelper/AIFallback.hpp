@@ -5,17 +5,19 @@
 
 namespace Slic3r {
 
-class AIFallback
+class AIFallback : public AIEngineBase
 {
 public:
     AIFallback() = default;
 
-    std::string get_backend_name() const { return "fallback"; }
-    bool supports_streaming() const { return false; }
-    bool needs_api_key() const { return false; }
-    bool is_available() const { return true; }
+    std::string get_backend_name() const override { return "fallback"; }
+    bool supports_streaming() const override { return false; }
+    bool needs_api_key() const override { return false; }
+    bool is_available() const override { return true; }
 
-    std::string test_connection() const { return "OK (offline)"; }
+    std::string test_connection() const override { return "OK (offline)"; }
+
+    void abort() override {}
 
     void chat(
         const std::vector<AIRequest>& history,
