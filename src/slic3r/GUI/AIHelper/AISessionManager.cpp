@@ -144,9 +144,9 @@ void AISessionManager::add_message(const Message& msg) {
         // Read trim limits from config
         size_t max_messages = 100;
         size_t max_kb = 500;
-        if (GUI::wxTheApp && GUI::wxGetApp().app_config) {
-            std::string max_msg_str = GUI::wxGetApp().app_config->get("ai", "max_messages");
-            std::string max_kb_str = GUI::wxGetApp().app_config->get("ai", "max_kb");
+        if (wxTheApp && Slic3r::GUI::wxGetApp().app_config) {
+            std::string max_msg_str = Slic3r::GUI::wxGetApp().app_config->get("ai", "max_messages");
+            std::string max_kb_str = Slic3r::GUI::wxGetApp().app_config->get("ai", "max_kb");
             if (!max_msg_str.empty()) {
                 try { max_messages = std::stoul(max_msg_str); } catch (...) {}
             }

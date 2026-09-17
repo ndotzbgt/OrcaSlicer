@@ -5,6 +5,8 @@
 #include <functional>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 namespace Slic3r {
 
 class SSEParser
@@ -30,6 +32,8 @@ private:
     void parse_buffer();
     void parse_line(const std::string& line);
     void emit_chunk(const std::string& text, bool done);
+    void emit_chunk(const std::string& text, bool done, const nlohmann::json& j);
+    std::string extract_text(const nlohmann::json& j);
 
     ChunkCallback m_callback;
     std::string m_buffer;
