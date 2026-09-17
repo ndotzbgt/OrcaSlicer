@@ -29,6 +29,7 @@ private:
 
     Action m_action;
     bool m_confirmed{false};
+    wxSizer* m_main_sizer;
 };
 
 }} // namespace Slic3r::GUI

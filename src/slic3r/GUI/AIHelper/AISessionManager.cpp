@@ -1,5 +1,6 @@
 #include "AISessionManager.hpp"
 #include "libslic3r/Utils.hpp"
+#include "GUI.hpp"
 #include "nlohmann/json.hpp"
 
 #include <wx/datetime.h>

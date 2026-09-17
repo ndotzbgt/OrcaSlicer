@@ -32,6 +32,7 @@ private:
     wxRadioButton* m_radio_cloud;
     wxRadioButton* m_radio_local;
     wxRadioButton* m_radio_deny;
+    wxSizer* m_main_sizer;
 };
 
 }} // namespace Slic3r::GUI
