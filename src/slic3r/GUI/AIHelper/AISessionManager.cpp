@@ -1,5 +1,6 @@
 #include "AISessionManager.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/AppConfig.hpp"
 #include "GUI.hpp"
 #include "nlohmann/json.hpp"
 
