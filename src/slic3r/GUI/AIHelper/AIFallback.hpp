@@ -24,7 +24,7 @@ public:
         const std::vector<AIRequest>& messages,
         AIStreamCallback on_chunk,
         std::function<void(const std::string& error)> on_error,
-        std::function<void()> on_done);
+        std::function<void()> on_done) override;
 
 private:
     std::string find_best_match(const std::string& query) const;
