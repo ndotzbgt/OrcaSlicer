@@ -17,7 +17,7 @@ AIContextData AIContext::build(const DynamicPrintConfig* config) {
     if (!config) return ctx;
 
     auto get_opt = [config](const char* key) -> std::string {
-        const auto* opt = config->get(key);
+        const auto* opt = config->option(key);
         return opt ? opt->serialize() : "";
     };
 
@@ -27,19 +27,19 @@ AIContextData AIContext::build(const DynamicPrintConfig* config) {
     ctx.bed_temperature = get_opt("bed_temperature");
     ctx.nozzle_temperature = get_opt("temperature");
 
-    if (auto* plater = wxGetApp().plater()) {
+    if (auto* plater = GUI::wxGetApp().plater()) {
         auto& model = plater->model();
         ctx.model_count = std::to_string(model.objects.size());
         double total_vol = 0;
         for (auto* obj : model.objects) {
-            total_vol += obj->volume();
+            total_vol += obj->mesh().volume();
         }
         ctx.total_volume = std::to_string(total_vol / 1000.0) + " cm³";
 
-        if (model.print_time > 0) {
-            int hours = model.print_time / 3600;
-            int mins = (model.print_time % 3600) / 60;
-            ctx.estimated_time = (hours > 0) ? (std::to_string(hours) + "h " + std::to_string(mins) + "m") : (std::to_string(mins) + "m");
+        // Print time from config if available
+        const auto* pt_opt = config->option("print_time");
+        if (pt_opt && !pt_opt->serialize().empty()) {
+            ctx.estimated_time = pt_opt->serialize();
         }
     }
 
@@ -47,8 +47,11 @@ AIContextData AIContext::build(const DynamicPrintConfig* config) {
 }
 
 AIContextData AIContext::build_from_current_project() {
-    if (auto* plater = wxGetApp().plater()) {
-        return build(plater->get_edited_preset());
+    if (auto* plater = GUI::wxGetApp().plater()) {
+        auto& preset_bundle = GUI::wxGetApp().preset_bundle;
+        if (preset_bundle) {
+            return build(&preset_bundle->prints.get_edited_preset().config);
+        }
     }
     return {};
 }

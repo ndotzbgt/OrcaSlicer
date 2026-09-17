@@ -153,7 +153,7 @@ void AIFallback::chat(
     const std::vector<AIRequest>& messages,
     AIStreamCallback on_chunk,
     std::function<void(const std::string& error)> on_error,
-    std::function<void()> on_done)
+    std::function<void()> on_done) override
 {
     std::string query;
     for (const auto& msg : messages) {

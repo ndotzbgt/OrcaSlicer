@@ -1,5 +1,6 @@
 #include "AIPermissionDialog.hpp"
 #include "I18N.hpp"
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 
 #include <wx/sizer.h>
