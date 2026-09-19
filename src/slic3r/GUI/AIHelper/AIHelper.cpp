@@ -381,7 +381,7 @@ void AIHelper::send_message(const std::string& text, const std::string& image_ba
         AIRequest req;
         req.role = msg.role;
         req.content = msg.content;
-        req.image_url = msg.image_base64;
+        req.image_base64 = msg.image_base64;
         if (msg.role == "user") {
             messages.push_back(req);
         } else {
@@ -411,7 +411,7 @@ void AIHelper::send_message(const std::string& text, const std::string& image_ba
                 m_send_btn->Show();
                 m_abort_btn->Hide();
                 m_input_sizer->Layout();
-                append_message("assistant", _L("Error: ") + error, false);
+                append_message("assistant", from_u8(_L("Error: ")) + error, false);
                 wxMessageBox(from_u8(error), _L("AI Assistant Error"));
             });
         },
@@ -487,7 +487,8 @@ void AIHelper::update_streaming_message(const std::string& token) {
     m_stream_buffer += token;
     if (m_stream_buffer.size() > 100) {
         // Flush immediately if buffer exceeds threshold
-        on_timer(wxTimerEvent(*m_stream_timer));
+        wxTimerEvent evt(*m_stream_timer);
+        on_timer(evt);
     }
 }
 
@@ -558,6 +559,10 @@ void AIHelper::on_webview_script_message(wxWebViewEvent& event) {
 }
 
 void AIHelper::on_send(wxCommandEvent& event) {
+    send_current_input();
+}
+
+void AIHelper::send_current_input() {
     std::string text = m_input->GetValue().ToStdString();
     if (!text.empty()) {
         send_message(text);
@@ -604,18 +609,9 @@ void AIHelper::on_clear(wxCommandEvent& event) {
 
 void AIHelper::on_key_down(wxKeyEvent& event) {
     if (event.GetKeyCode() == WXK_RETURN && !event.ShiftDown() && event.GetEventObject() == m_input) {
-        on_send(event);
+        send_current_input();
     } else {
         event.Skip();
-    }
-}
-
-void AIHelper::on_timer(wxTimerEvent& event) {
-    // Token batching: flush buffered tokens every 50ms or when buffer exceeds 100 chars
-    if (!m_stream_buffer.empty()) {
-        std::string script = "updateStreamingMessage('" + escape_js(m_stream_buffer) + "');";
-        WebView::RunScript(m_webview, from_u8(script));
-        m_stream_buffer.clear();
     }
 }
 
@@ -627,6 +623,15 @@ static std::string escape_js(const std::string& s) {
     boost::replace_all(escaped, "\r", "");
     boost::replace_all(escaped, "\"", "\\\"");
     return escaped;
+}
+
+void AIHelper::on_timer(wxTimerEvent& event) {
+    // Token batching: flush buffered tokens every 50ms or when buffer exceeds 100 chars
+    if (!m_stream_buffer.empty()) {
+        std::string script = "updateStreamingMessage('" + escape_js(m_stream_buffer) + "');";
+        WebView::RunScript(m_webview, from_u8(script));
+        m_stream_buffer.clear();
+    }
 }
 
 void AIHelper::apply_dark_mode() {

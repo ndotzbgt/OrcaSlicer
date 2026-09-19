@@ -47,6 +47,7 @@ private:
     void on_webview_loaded(wxWebViewEvent& event);
     void on_webview_script_message(wxWebViewEvent& event);
     void on_send(wxCommandEvent& event);
+    void send_current_input();
     void on_abort(wxCommandEvent& event);
     void on_attachment(wxCommandEvent& event);
     void on_clear(wxCommandEvent& event);
@@ -76,6 +77,7 @@ private:
     bool m_streaming{false};
     std::string m_pending_tokens;
     std::string m_stream_buffer;
+    std::string m_currentStreamingId;
     wxTimer* m_stream_timer;
     bool m_dark_mode{false};
 
