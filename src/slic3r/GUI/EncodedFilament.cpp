@@ -73,17 +73,17 @@ void FilamentColorCodeQuery::LoadFromLocal()
             const json& json_data = json_content["data"];
             for (const auto& json_data_item : json_data)
             {
-                const wxString& fila_id = json_data_item.contains("fila_id") ? json_data_item["fila_id"].get<wxString>() : wxString();
-                const wxString& fila_type = json_data_item.contains("fila_type") ? json_data_item["fila_type"].get<wxString>() : wxString();
-                const wxString& fila_color_code = json_data_item.contains("fila_color_code") ? json_data_item["fila_color_code"].get<wxString>() : wxString();
+                const wxString& fila_id = json_data_item.contains("fila_id") ? GUI::from_u8(json_data_item["fila_id"].get<std::string>()) : wxString();
+                const wxString& fila_type = json_data_item.contains("fila_type") ? GUI::from_u8(json_data_item["fila_type"].get<std::string>()) : wxString();
+                const wxString& fila_color_code = json_data_item.contains("fila_color_code") ? GUI::from_u8(json_data_item["fila_color_code"].get<std::string>()) : wxString();
 
                 FilamentColor fila_color;
                 if (json_data_item.contains("fila_color"))
                 {
-                    const auto& fila_color_strs = json_data_item["fila_color"].get<std::vector<wxString>>();
+                    const auto& fila_color_strs = json_data_item["fila_color"].get<std::vector<std::string>>();
                     for (const auto& color_str : fila_color_strs) {
                         if (color_str.size() > 3) /* Skip the value like "#0"*/{
-                            fila_color.m_colors.emplace(wxColour(color_str));
+                            fila_color.m_colors.emplace(wxColour(GUI::from_u8(color_str)));
                         }
                     }
                 }
@@ -93,7 +93,7 @@ void FilamentColorCodeQuery::LoadFromLocal()
                     continue; // Skip if no colors are defined
                 };
 
-                const wxString& fila_color_type = json_data_item.contains("fila_color_type") ? wxString::FromUTF8(json_data_item["fila_color_type"].get<std::string>()) : wxString();
+                const wxString& fila_color_type = json_data_item.contains("fila_color_type") ? GUI::from_u8(json_data_item["fila_color_type"].get<std::string>()) : wxString();
                 if (fila_color_type == wxString::FromUTF8("单色")) {
                     fila_color.m_color_type = FilamentColor::ColorType::SINGLE_CLR;
                 } else if (fila_color_type == wxString::FromUTF8("多拼色")) {
