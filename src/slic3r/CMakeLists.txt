@@ -53,10 +53,10 @@ GUI/AIHelper/AIPermissionDialog.hpp
 GUI/AIHelper/AIPermissionDialog.cpp
 GUI/AIHelper/AIActionConfirmDialog.hpp
 GUI/AIHelper/AIActionConfirmDialog.cpp
-GUI/AIHelper/AIHelper.hpp
-GUI/AIHelper/AIHelper.cpp
-GUI/AIHelper/AIHelperIcons.hpp
-GUI/AIHelper/AIHelperIcons.cpp
+# GUI/AIHelper/AIHelper.hpp
+# GUI/AIHelper/AIHelper.cpp
+# GUI/AIHelper/AIHelperIcons.hpp
+# GUI/AIHelper/AIHelperIcons.cpp
 GUI/AIHelper/SSEParser.hpp
 GUI/AIHelper/SSEParser.cpp
 GUI/AIHelper/Keychain.cpp

@@ -93,11 +93,11 @@ wxDEFINE_EVENT(EVT_SHOW_IP_DIALOG, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_MACHINE_LIST, wxCommandEvent);
 wxDEFINE_EVENT(EVT_UPDATE_PRESET_CB, SimpleEvent);
 
-wxDEFINE_EVENT(EVT_AI_HELPER_TOGGLE, wxCommandEvent);
-wxDEFINE_EVENT(EVT_AI_CHAT_START, wxCommandEvent);
-wxDEFINE_EVENT(EVT_AI_CHAT_END, wxCommandEvent);
-wxDEFINE_EVENT(EVT_AI_CHAT_MESSAGE, wxCommandEvent);
-wxDEFINE_EVENT(EVT_AI_ACTION_CONFIRM, wxCommandEvent);
+// wxDEFINE_EVENT(EVT_AI_HELPER_TOGGLE, wxCommandEvent);
+// wxDEFINE_EVENT(EVT_AI_CHAT_START, wxCommandEvent);
+// wxDEFINE_EVENT(EVT_AI_CHAT_END, wxCommandEvent);
+// wxDEFINE_EVENT(EVT_AI_CHAT_MESSAGE, wxCommandEvent);
+// wxDEFINE_EVENT(EVT_AI_ACTION_CONFIRM, wxCommandEvent);
 
 
 // BBS: backup
@@ -1336,9 +1336,9 @@ void MainFrame::init_tabpanel() {
     m_calibration->SetBackgroundColour(*wxWHITE);
     m_tabpanel->AddPage(TAB_ID_CALIBRATION, m_calibration, _L("Calibration"), "tab_calibration_active");
 
-    // AI Helper panel
-    m_ai_helper = new AIHelper(this);
-    m_ai_helper->Hide();
+    // AI Helper panel (temporarily disabled)
+    // m_ai_helper = new AIHelper(this);
+    // m_ai_helper->Hide();
 
     // Plugin pages are appended after the built-in tabs; their ids are namespaced
     // (plugin.<plugin_key>.<name>) so they can't collide with the built-in TAB_ID_* constants.
