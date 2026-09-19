@@ -77,4 +77,10 @@ void AIPermissionDialog::on_deny(wxCommandEvent&) { m_selected_level = Permissio
 void AIPermissionDialog::on_ok(wxCommandEvent&) { EndModal(wxID_OK); }
 void AIPermissionDialog::on_cancel(wxCommandEvent&) { EndModal(wxID_CANCEL); }
 
+void AIPermissionDialog::on_dpi_changed(const wxRect& suggested_rect) {
+    Layout();
+    Fit();
+    if (!suggested_rect.IsEmpty()) SetSize(suggested_rect);
+}
+
 }} // namespace Slic3r::GUI

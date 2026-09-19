@@ -80,4 +80,10 @@ void AIActionConfirmDialog::on_dismiss(wxCommandEvent&) {
     EndModal(wxID_CANCEL);
 }
 
+void AIActionConfirmDialog::on_dpi_changed(const wxRect& suggested_rect) {
+    Layout();
+    Fit();
+    if (!suggested_rect.IsEmpty()) SetSize(suggested_rect);
+}
+
 }} // namespace Slic3r::GUI

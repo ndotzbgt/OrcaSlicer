@@ -116,7 +116,7 @@ void AIGeminiEngine::do_chat_stream(
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([this, &perform_request, sse_parser_local, on_chunk, on_error, on_done, current_attempt](std::string body, std::string error, unsigned status) {
+            .on_error([&perform_request, &sse_parser_local, &on_chunk, &on_error, &on_done, current_attempt](std::string body, std::string error, unsigned status) {
                 // Retry on transient errors (429, 5xx, network errors)
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
                 if (retryable && current_attempt < 5) {

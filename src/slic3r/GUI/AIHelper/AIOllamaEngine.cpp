@@ -100,7 +100,7 @@ void AIOllamaEngine::do_chat_stream(
                 on_chunk(AIChunk{"", true});
                 on_done();
             })
-            .on_error([this, &perform_request, sse_parser_local, on_chunk, on_error, on_done, current_attempt](std::string body, std::string error, unsigned status) {
+            .on_error([&perform_request, &sse_parser_local, &on_chunk, &on_error, &on_done, current_attempt](std::string body, std::string error, unsigned status) {
                 bool retryable = (status == 429 || (status >= 500 && status < 600) || status == 0);
                 if (retryable && current_attempt < 5) {
                     int delay_ms = 1000 * (1 << current_attempt);

@@ -51,6 +51,10 @@ private:
     void on_attachment(wxCommandEvent& event);
     void on_clear(wxCommandEvent& event);
     void on_key_down(wxKeyEvent& event);
+    void showTyping(bool show);
+    void take_screenshot();
+    void load_image_file(const std::string& path);
+    void load_image_url(const std::string& url);
     void on_timer(wxTimerEvent& event);
     void apply_dark_mode();
 

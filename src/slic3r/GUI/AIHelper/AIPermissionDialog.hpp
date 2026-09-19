@@ -27,6 +27,7 @@ private:
     void on_deny(wxCommandEvent&);
     void on_ok(wxCommandEvent&);
     void on_cancel(wxCommandEvent&);
+    void on_dpi_changed(const wxRect& suggested_rect) override;
 
     PermissionLevel m_selected_level;
     wxRadioButton* m_radio_cloud;

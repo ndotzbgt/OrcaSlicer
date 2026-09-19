@@ -487,7 +487,7 @@ void AIHelper::update_streaming_message(const std::string& token) {
     m_stream_buffer += token;
     if (m_stream_buffer.size() > 100) {
         // Flush immediately if buffer exceeds threshold
-        on_timer(wxTimerEvent());
+        on_timer(wxTimerEvent(*m_stream_timer));
     }
 }
 
@@ -575,7 +575,7 @@ void AIHelper::on_attachment(wxCommandEvent& event) {
     menu.Append(wxID_ANY, _L("From File..."));
     menu.Append(wxID_ANY, _L("From URL..."));
     PopupMenu(&menu, m_attachment_btn->GetPosition() + wxPoint(0, m_attachment_btn->GetSize().GetHeight()));
-    menu.Bind(wxEVT_MENU, [this](wxCommandEvent& evt) {
+    menu.Bind(wxEVT_MENU, [this, &menu](wxCommandEvent& evt) {
         int id = evt.GetId();
         if (id == menu.FindItem(_L("Screenshot"))) {
             take_screenshot();

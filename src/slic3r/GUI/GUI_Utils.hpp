@@ -81,6 +81,11 @@ int get_dpi_for_window(const wxWindow *window);
 wxFont get_default_font_for_dpi(const wxWindow* window, int dpi);
 inline wxFont get_default_font(const wxWindow* window) { return get_default_font_for_dpi(window, get_dpi_for_window(window)); }
 
+inline int FromDIP(int d, const wxWindow* window = nullptr) {
+    int dpi = get_dpi_for_window(window);
+    return (d * dpi) / DPI_DEFAULT;
+}
+
 bool check_dark_mode();
 void update_dark_config();
 #ifdef _WIN32

@@ -26,6 +26,7 @@ private:
     void create_controls();
     void on_apply(wxCommandEvent&);
     void on_dismiss(wxCommandEvent&);
+    void on_dpi_changed(const wxRect& suggested_rect) override;
 
     Action m_action;
     bool m_confirmed{false};

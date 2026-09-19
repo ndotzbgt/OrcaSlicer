@@ -22,21 +22,22 @@ wxBitmap* AIHelperIcons::m_clear_icon_dark = nullptr;
 
 void AIHelperIcons::init() {
     // Use wxArtProvider for built-in icons (no external assets needed)
-    m_ai_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_INFORMATION, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    wxSize icon_size(FromDIP(24), FromDIP(24));
+    m_ai_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_INFORMATION, wxART_OTHER, icon_size));
     m_ai_icon_dark = new wxBitmap(*m_ai_icon);
-    m_send_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_GO_FORWARD, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_send_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_GO_FORWARD, wxART_OTHER, icon_size));
     m_send_icon_dark = new wxBitmap(*m_send_icon);
-    m_stop_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_CROSS_MARK, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_stop_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_CROSS_MARK, wxART_OTHER, icon_size));
     m_stop_icon_dark = new wxBitmap(*m_stop_icon);
-    m_attachment_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_FILE_OPEN, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_attachment_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_FILE_OPEN, wxART_OTHER, icon_size));
     m_attachment_icon_dark = new wxBitmap(*m_attachment_icon);
-    m_settings_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_EXECUTABLE_FILE, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_settings_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_EXECUTABLE_FILE, wxART_OTHER, icon_size));
     m_settings_icon_dark = new wxBitmap(*m_settings_icon);
-    m_copy_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_COPY, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_copy_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_COPY, wxART_OTHER, icon_size));
     m_copy_icon_dark = new wxBitmap(*m_copy_icon);
-    m_regenerate_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_UNDO, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_regenerate_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_UNDO, wxART_OTHER, icon_size));
     m_regenerate_icon_dark = new wxBitmap(*m_regenerate_icon);
-    m_clear_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_DELETE, wxART_OTHER, FromDIP(wxSize(24, 24))));
+    m_clear_icon = new wxBitmap(wxArtProvider::GetBitmap(wxART_DELETE, wxART_OTHER, icon_size));
     m_clear_icon_dark = new wxBitmap(*m_clear_icon);
 }
 
