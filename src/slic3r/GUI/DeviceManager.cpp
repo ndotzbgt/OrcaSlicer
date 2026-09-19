@@ -5833,11 +5833,11 @@ wxString MachineObject::get_nozzle_replace_url() const
 
     const json& link_map = DevPrinterConfigUtil::get_json_from_config(printer_type, "print", "nozzle_replace_wiki");
     if (link_map.contains(lan_code.ToStdString())) {
-        return from_u8(link_map[lan_code.ToStdString()].get<std::string>());
+        return GUI::from_u8(link_map[lan_code.ToStdString()].get<std::string>());
     }
 
     if (link_map.contains("en")){
-        return from_u8(link_map["en"].get<std::string>());
+        return GUI::from_u8(link_map["en"].get<std::string>());
     }/*retry with en*/
 
     // Orca: no neutral wiki equivalent for this fallback — return empty so the caller hides the link
