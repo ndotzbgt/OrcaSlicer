@@ -36,7 +36,7 @@
 #include "calib_dlg.hpp"
 #include "MultiMachinePage.hpp"
 #include "slic3r/plugin/host/PluginPages.hpp"
-#include "AIHelper/AIHelper.hpp"
+// #include "AIHelper/AIHelper.hpp"  // Temporarily disabled for build
 
 // Stable identifiers for MainFrame::m_tabpanel's built-in pages. These are
 // names rather than positional indices so optional pages cannot shift them.
@@ -326,9 +326,9 @@ public:
     //BBS: hint when jump to 3Deditor under preview only mode
     bool        preview_only_hint();
 
-    // AI Helper
-    void        toggle_ai_helper();
-    AIHelper*   ai_helper() const { return m_ai_helper; }
+    // AI Helper (temporarily disabled)
+//     void        toggle_ai_helper();
+//     AIHelper*   ai_helper() const { return m_ai_helper; }
     // Select tab in m_tabpanel
     // When tab == -1, will be selected last selected tab
     //BBS: GUI refactor
@@ -388,15 +388,8 @@ public:
     //BBS: GUI refactor
     MonitorPanel*         m_monitor{ nullptr };
 
-    //AuxiliaryPanel*       m_auxiliary{ nullptr };
-    MultiMachinePage*     m_multi_machine{ nullptr };
-    ProjectPanel*         m_project{ nullptr };
-
-    CalibrationPanel*     m_calibration{ nullptr };
-    WebViewPanel*         m_webview { nullptr };
-    PrinterWebView*       m_printer_view{nullptr};
-    PluginPages           m_plugin_pages;
-    AIHelper*             m_ai_helper{ nullptr };
+    // AI Helper (temporarily disabled)
+    // AIHelper*             m_ai_helper{ nullptr };
     wxLogWindow*          m_log_window { nullptr };
     // BBS
     //wxBookCtrlBase*       m_tabpanel { nullptr };
