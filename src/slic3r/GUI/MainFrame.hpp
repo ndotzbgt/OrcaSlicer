@@ -370,6 +370,7 @@ public:
     // True while either of the two tabs backed by m_plater is selected.
     bool is_prepare_or_preview_tab() const;
     PluginPages& plugin_pages() { return m_plugin_pages; }
+    PluginPages           m_plugin_pages;
 
     PA_Calibration_Dlg* m_pa_calib_dlg{ nullptr };
     FlowRateCalibrationDialog* m_flow_rate_calib_dlg{ nullptr };
