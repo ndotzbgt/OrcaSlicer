@@ -20,6 +20,14 @@ public:
     // Erase a secret for the given service/account
     // Returns true on success (or if not found)
     static bool erase(const std::string& service, const std::string& account);
+
+private:
+    class Impl {
+    public:
+        static bool store(const std::string& secret);
+        static std::optional<std::string> retrieve();
+        static bool erase();
+    };
 };
 
 }} // namespace Slic3r::GUI

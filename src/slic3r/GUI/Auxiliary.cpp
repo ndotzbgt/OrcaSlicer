@@ -1019,7 +1019,7 @@ void AuxiliaryPanel::Reload(wxString aux_path, std::map<std::string, std::vector
     for (const auto & path : paths) {
         m_paths_list[path.first] = std::vector<fs::path>{};
         for (const auto & j : path.second) {
-            m_paths_list[path.first].push_back(j["_filepath"]);
+            m_paths_list[path.first].push_back(fs::path(j["_filepath"].get<std::string>()));
         }
     }
 

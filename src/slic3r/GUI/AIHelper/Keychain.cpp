@@ -250,9 +250,7 @@ bool keychain_erase_linux() {
 
 } // anonymous namespace
 
-class Keychain::Impl {
-public:
-    static bool store(const std::string& secret) {
+bool Keychain::Impl::store(const std::string& secret) {
 #ifdef _WIN32
         return keychain_store_win(secret);
 #elif defined(__APPLE__)
@@ -281,7 +279,7 @@ public:
         return keychain_erase_linux();
 #endif
     }
-};
+}
 
 bool Keychain::store(const std::string& service, const std::string& account, const std::string& secret) {
     (void)service; (void)account; // Use hardcoded names for now
