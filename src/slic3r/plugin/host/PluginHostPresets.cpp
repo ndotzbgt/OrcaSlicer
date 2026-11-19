@@ -1,4 +1,5 @@
 #include "PluginHostBindings.hpp"
+#include "PluginHostPresets.hpp"
 #include "PluginHostUi.hpp"
 #include "slic3r/plugin/PluginBindingUtils.hpp"
 
@@ -23,6 +24,7 @@
 
 #include <wx/string.h>
 
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -154,7 +156,7 @@ struct PresetTransaction
     bool                                             committed = false;
 
     void               set(const std::string& key, const std::string& value);
-    PresetUpdateResult commit();
+    PresetUpdateResult commit(const std::map<std::string, std::string>& expected_current = {});
 };
 
 GUI::GUI_App& require_gui_app()
@@ -292,7 +294,7 @@ void PresetTransaction::set(const std::string& key, const std::string& value)
     staged.emplace_back(key, value);
 }
 
-PresetUpdateResult PresetTransaction::commit()
+PresetUpdateResult PresetTransaction::commit(const std::map<std::string, std::string>& expected_current)
 {
     if (committed)
         throw std::runtime_error("This preset transaction has already been committed; start a new begin_update()");
@@ -322,6 +324,11 @@ PresetUpdateResult PresetTransaction::commit()
                                          + "\", not \"" + slot_assignment_snapshot
                                          + "\" as when this transaction was created; the slot mapping changed, so nothing was applied");
         }
+
+        // Expected values are checked in the same UI-thread callback that applies the batch. The
+        // check and the write therefore cannot be separated by a concurrent user edit.
+        if (!expected_current.empty())
+            verify_expected_current_values(collection.get_edited_preset().config, expected_current);
 
         // Apply the whole batch through the tab's batch path: it validates every key and value before
         // touching the preset, rejects duplicate keys, runs the same per-setting commit path a hand
@@ -709,11 +716,18 @@ void host_bindings::register_presets(py::module_& host)
              "serialized string form; staging validates neither, so commit() is where an invalid key or value "
              "fails. Staging the same key twice in one transaction raises ValueError (conflicting duplicate "
              "writes are rejected). After commit() the transaction is closed.")
-        .def("commit", &PresetTransaction::commit,
-             "Validate and apply every staged setting through the same path as editing it in the GUI, then return "
-             "a PresetUpdateResult. An invalid key or value raises ValueError; a changed target or filament slot "
-             "mapping raises RuntimeError; a failure leaves none of the staged settings applied. The edited preset "
-             "becomes dirty until the user saves it.");
+        .def(
+            "commit",
+            [](PresetTransaction& transaction, const std::map<std::string, std::string>& expected_current) {
+                return transaction.commit(expected_current);
+            },
+            py::arg("expected_current") = std::map<std::string, std::string>{},
+            "Validate and apply every staged setting through the same path as editing it in the GUI, then return "
+            "a PresetUpdateResult. expected_current optionally maps setting keys to the serialized values they must "
+            "still have at commit time; those checks and the batch write run atomically on the UI thread. An invalid "
+            "key or value raises ValueError; a changed target, filament slot mapping, or expected current value "
+            "raises RuntimeError; a failure leaves none of the staged settings applied. The edited preset becomes "
+            "dirty until the user saves it.");
 
     py::class_<PresetEditor>(preset, "PresetEditor",
                              "Handle to a category of currently edited preset. It is not a snapshot: it always "

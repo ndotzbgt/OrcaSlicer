@@ -1,0 +1,1375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orca AI Agent</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: var(--orca-bg, #17191d);
+      --fg: var(--orca-fg, #f2f4f7);
+      --muted: var(--orca-muted, #9ca3af);
+      --border: var(--orca-border, #343a43);
+      --accent: var(--orca-accent, #6c8cff);
+      --accent-fg: var(--orca-accent-fg, #ffffff);
+      --surface: #22262d;
+      --surface-raised: #292e36;
+      --danger: #ff7b7b;
+      --success: #67d391;
+      --shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    body {
+      font-family: var(--orca-font, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      color: var(--accent-fg);
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      padding: 7px 12px;
+      cursor: pointer;
+      transition: filter 120ms ease, opacity 120ms ease, transform 120ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+
+    button:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+    }
+
+    button.secondary {
+      color: var(--fg);
+      background: transparent;
+      border-color: var(--border);
+    }
+
+    button.icon-button {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border-color: transparent;
+      font-size: 16px;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    textarea {
+      width: 100%;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      outline: none;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      height: 34px;
+      padding: 6px 9px;
+    }
+
+    input:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(108, 140, 255, 0.18);
+    }
+
+    textarea {
+      min-height: 66px;
+      max-height: 150px;
+      padding: 9px 10px;
+      resize: vertical;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    .logo {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--accent-fg);
+      background: linear-gradient(145deg, var(--accent), #8a5cf6);
+      box-shadow: var(--shadow);
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .title-block {
+      min-width: 0;
+      flex: 1;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+    }
+
+    .subtitle {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status {
+      max-width: 145px;
+      overflow: hidden;
+      padding: 3px 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status.ready {
+      color: var(--success);
+      border-color: rgba(103, 211, 145, 0.4);
+    }
+
+    .status.busy {
+      color: var(--accent);
+      border-color: rgba(108, 140, 255, 0.5);
+    }
+
+    .status.error {
+      color: var(--danger);
+      border-color: rgba(255, 123, 123, 0.45);
+    }
+
+    .setup {
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .field-label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .secret-wrap {
+      position: relative;
+    }
+
+    .secret-wrap input {
+      padding-right: 38px;
+    }
+
+    .secret-wrap .icon-button {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .privacy-note {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    .check {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .check input {
+      margin: 2px 0 0;
+      accent-color: var(--accent);
+    }
+
+    .model-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+    }
+
+    .model-row .field-label {
+      margin: 0;
+    }
+
+    .mini-button {
+      padding: 5px 8px;
+      font-size: 11px;
+    }
+
+    .chat-log {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px;
+      scroll-behavior: smooth;
+    }
+
+    .welcome {
+      margin: 18px 6px;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      background: var(--surface);
+      text-align: center;
+    }
+
+    .welcome strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--fg);
+      font-size: 13px;
+    }
+
+    .message {
+      display: grid;
+      gap: 4px;
+      margin-bottom: 11px;
+    }
+
+    .message.user {
+      justify-items: end;
+    }
+
+    .message-meta {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .bubble {
+      max-width: 92%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-raised);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .message.user .bubble {
+      color: var(--accent-fg);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .message.system .bubble {
+      color: var(--danger);
+      background: rgba(255, 123, 123, 0.08);
+      border-color: rgba(255, 123, 123, 0.3);
+    }
+
+    .thinking {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px 9px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .dots {
+      display: inline-flex;
+      gap: 3px;
+    }
+
+    .dots i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 1.2s infinite ease-in-out;
+    }
+
+    .dots i:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    .dots i:nth-child(3) {
+      animation-delay: 0.3s;
+    }
+
+    @keyframes pulse {
+      0%, 70%, 100% { opacity: 0.25; transform: translateY(0); }
+      35% { opacity: 1; transform: translateY(-2px); }
+    }
+
+    .preview {
+      max-height: 190px;
+      overflow-y: auto;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .preview-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px 6px;
+    }
+
+    .preview-header h2 {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .parameter-target {
+      max-width: 145px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .parameter-notice {
+      padding: 0 10px 7px;
+      color: #ffd28a;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    .parameter-list {
+      display: grid;
+      gap: 6px;
+      padding: 0 10px 10px;
+    }
+
+    .parameter {
+      padding: 7px 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+
+    .parameter-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .parameter-key {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .parameter-value {
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .parameter-reason {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      padding: 1px 5px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--surface-raised);
+      font-size: 9px;
+      text-transform: uppercase;
+    }
+
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 8px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    .composer textarea {
+      min-height: 58px;
+    }
+
+    .send-button {
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      font-size: 17px;
+    }
+
+    @media (max-height: 500px) {
+      .setup {
+        gap: 5px;
+        padding-block: 7px;
+      }
+
+      .model-row {
+        display: none;
+      }
+
+      .preview {
+        max-height: 130px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="logo" aria-hidden="true">AI</div>
+      <div class="title-block">
+        <h1>Orca AI Agent</h1>
+        <div class="subtitle">Gemini • OrcaSlicer preset assistant</div>
+      </div>
+      <div id="status" class="status" role="status">Connecting…</div>
+      <button id="clearChat" class="icon-button" type="button"
+              title="Clear chat" aria-label="Clear chat">↺</button>
+    </header>
+
+    <section class="setup" aria-label="AI configuration">
+      <div>
+        <label class="field-label" for="apiKey">Google AI Studio API key</label>
+        <div class="secret-wrap">
+          <input id="apiKey" type="password" autocomplete="off" spellcheck="false"
+                 maxlength="4096" placeholder="Paste your API key here">
+          <button id="toggleKey" class="icon-button" type="button"
+                  title="Show or hide the API key"
+                  aria-label="Show or hide the API key">◉</button>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <label class="check">
+          <input id="rememberKey" type="checkbox">
+          <span>Save key in browser storage (not encrypted; may be shared)</span>
+        </label>
+        <button id="forgetKey" class="secondary mini-button" type="button" hidden>Remove</button>
+        <button id="saveSettings" class="mini-button" type="button">Save</button>
+      </div>
+
+      <div class="model-row">
+        <label class="field-label" for="model">Model</label>
+        <input id="model" type="text" value="gemini-3.8-flash" maxlength="100"
+               spellcheck="false" autocomplete="off">
+      </div>
+
+      <p class="privacy-note">
+        Your API key, prompts, chat history, and current preset context are sent to Google Gemini.
+      </p>
+    </section>
+
+    <main id="chatLog" class="chat-log" aria-live="polite" aria-label="Chat history">
+      <div id="welcome" class="welcome">
+        <strong>Ready to help with your slicer.</strong>
+        Ask about print quality, speed, material, or request safe preset changes to preview.
+      </div>
+    </main>
+
+    <div id="thinking" class="thinking" hidden>
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span id="thinkingText">Gemini is thinking…</span>
+    </div>
+
+    <section id="preview" class="preview" aria-label="Parameter preview" hidden>
+      <div class="preview-header">
+        <h2>Parameter preview</h2>
+        <span id="parameterTarget" class="parameter-target"></span>
+        <button id="applyParameters" type="button" disabled>Apply</button>
+      </div>
+      <div id="parameterNotice" class="parameter-notice" hidden></div>
+      <div id="parameterList" class="parameter-list"></div>
+    </section>
+
+    <footer class="composer">
+      <textarea id="prompt" maxlength="8000"
+                placeholder="Example: use 0.2 mm layers and 3 walls for a stronger result…"
+                aria-label="Message for AI"></textarea>
+      <button id="send" class="send-button" type="button" title="Send" aria-label="Send">➤</button>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var bridge = window.orca;
+      var STORAGE_API_KEY = "orca.ai_agent.api_key";
+      var STORAGE_MODEL = "orca.ai_agent.model";
+      var DEFAULT_MODEL = "gemini-3.8-flash";
+      var MAX_API_KEY_LENGTH = 4096;
+      var MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+      var ACK_TIMEOUT_MS = 5000;
+      var CHAT_RESPONSE_TIMEOUT_MS = 90000;
+      var APPLY_RESPONSE_TIMEOUT_MS = 300000;
+      var elements = {
+        status: document.getElementById("status"),
+        clearChat: document.getElementById("clearChat"),
+        apiKey: document.getElementById("apiKey"),
+        toggleKey: document.getElementById("toggleKey"),
+        rememberKey: document.getElementById("rememberKey"),
+        forgetKey: document.getElementById("forgetKey"),
+        saveSettings: document.getElementById("saveSettings"),
+        model: document.getElementById("model"),
+        chatLog: document.getElementById("chatLog"),
+        welcome: document.getElementById("welcome"),
+        thinking: document.getElementById("thinking"),
+        thinkingText: document.getElementById("thinkingText"),
+        preview: document.getElementById("preview"),
+        parameterTarget: document.getElementById("parameterTarget"),
+        parameterNotice: document.getElementById("parameterNotice"),
+        parameterList: document.getElementById("parameterList"),
+        applyParameters: document.getElementById("applyParameters"),
+        prompt: document.getElementById("prompt"),
+        send: document.getElementById("send")
+      };
+
+      var state = {
+        busy: false,
+        applying: false,
+        connected: false,
+        contextWarning: null,
+        apiKeyConfigured: false,
+        apiKeyStored: false,
+        request: null,
+        contextRetryTimer: null,
+        requestCounter: 0,
+        hasLocalMessages: false,
+        parameters: [],
+        target: null
+      };
+
+      function readStorage(key) {
+        try {
+          return window.localStorage.getItem(key);
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function writeStorage(key, value) {
+        try {
+          window.localStorage.setItem(key, value);
+          return true;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      function removeStorage(key) {
+        try {
+          window.localStorage.removeItem(key);
+          return true;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      function loadStoredSettings() {
+        var storedKey = readStorage(STORAGE_API_KEY);
+        var normalizedKey = storedKey ? storedKey.trim() : "";
+        if (normalizedKey && normalizedKey.length <= MAX_API_KEY_LENGTH) {
+          elements.apiKey.value = normalizedKey;
+          elements.rememberKey.checked = true;
+          state.apiKeyConfigured = true;
+          state.apiKeyStored = true;
+          elements.forgetKey.hidden = false;
+        } else if (storedKey) {
+          var removedInvalidKey = removeStorage(STORAGE_API_KEY);
+          state.apiKeyStored = !removedInvalidKey;
+          elements.forgetKey.hidden = !state.apiKeyStored;
+          if (!removedInvalidKey) {
+            addMessage("system", "An invalid saved API key could not be removed and remains in browser storage.");
+          }
+        }
+
+        var storedModel = readStorage(STORAGE_MODEL);
+        if (storedModel && MODEL_PATTERN.test(storedModel)) {
+          elements.model.value = storedModel;
+        } else {
+          elements.model.value = DEFAULT_MODEL;
+          if (storedModel) {
+            removeStorage(STORAGE_MODEL);
+          }
+        }
+      }
+
+      function send(action, payload) {
+        if (!bridge || typeof bridge.postMessage !== "function") {
+          return false;
+        }
+        var message = { action: action };
+        if (payload) {
+          Object.keys(payload).forEach(function (key) {
+            message[key] = payload[key];
+          });
+        }
+        try {
+          bridge.postMessage(message);
+          return true;
+        } catch (error) {
+          return false;
+        }
+      }
+
+      function clearRequestTimers(request) {
+        if (request.ackTimer !== null) {
+          window.clearTimeout(request.ackTimer);
+          request.ackTimer = null;
+        }
+        if (request.responseTimer !== null) {
+          window.clearTimeout(request.responseTimer);
+          request.responseTimer = null;
+        }
+      }
+
+      function nextRequestId() {
+        state.requestCounter += 1;
+        return Date.now().toString(36) + "-" + state.requestCounter.toString(36);
+      }
+
+      function scheduleContextRetry() {
+        if (state.contextRetryTimer !== null) {
+          return;
+        }
+        state.contextRetryTimer = window.setTimeout(function () {
+          state.contextRetryTimer = null;
+          if (!state.connected || state.contextWarning) {
+            send("ready");
+            scheduleContextRetry();
+          }
+        }, 5000);
+      }
+
+      function finishRequest(requestId) {
+        var request = state.request;
+        if (!request || request.id !== requestId) {
+          return false;
+        }
+        clearRequestTimers(request);
+        state.request = null;
+        updateControls();
+        return true;
+      }
+
+      function timeoutRequest(request, phase) {
+        if (state.request !== request) {
+          return;
+        }
+        clearRequestTimers(request);
+        state.request = null;
+
+        if (request.action === "chat") {
+          setBusy(false);
+          setStatus("Request timed out", "error");
+          addMessage(
+            "system",
+            phase === "ack"
+              ? "The OrcaSlicer host did not acknowledge the Gemini request. Check the panel bridge and try again."
+              : "Gemini did not respond before the request timed out. Please try again."
+          );
+        } else if (request.action === "apply") {
+          setApplying(false);
+          clearParameters();
+          setStatus("Apply timed out", "error");
+          addMessage(
+            "system",
+            phase === "ack"
+              ? "The OrcaSlicer host did not acknowledge the apply request. Check the preset before retrying."
+              : "The host did not finish applying the changes in time. Check the preset before retrying."
+          );
+        } else {
+          updateControls();
+          setStatus("Clear timed out", "error");
+          addMessage("system", "The OrcaSlicer host did not clear the chat history in time.");
+        }
+      }
+
+      function acknowledgeRequest(requestId, action) {
+        var request = state.request;
+        if (!request || request.id !== requestId || request.action !== action) {
+          return;
+        }
+        if (request.ackTimer !== null) {
+          window.clearTimeout(request.ackTimer);
+          request.ackTimer = null;
+        }
+        if (request.responseTimer !== null) {
+          return;
+        }
+        var timeout = request.action === "chat"
+          ? CHAT_RESPONSE_TIMEOUT_MS
+          : (request.action === "apply" ? APPLY_RESPONSE_TIMEOUT_MS : ACK_TIMEOUT_MS);
+        request.responseTimer = window.setTimeout(function () {
+          timeoutRequest(request, "response");
+        }, timeout);
+      }
+
+      function startRequest(action, payload) {
+        if (state.request) {
+          return false;
+        }
+
+        var requestId = nextRequestId();
+        var request = {
+          id: requestId,
+          action: action,
+          ackTimer: null,
+          responseTimer: null
+        };
+        state.request = request;
+        updateControls();
+        if (action === "clear_history") {
+          setStatus("Clearing…", "busy");
+        }
+
+        var requestPayload = payload || {};
+        requestPayload.request_id = requestId;
+
+        // Arm the acknowledgement timer before posting. A host bridge is normally asynchronous, but
+        // handling a synchronous acknowledgement first must not leave a second timer armed later.
+        request.ackTimer = window.setTimeout(function () {
+          timeoutRequest(request, "ack");
+        }, ACK_TIMEOUT_MS);
+        if (!send(action, requestPayload)) {
+          clearRequestTimers(request);
+          state.request = null;
+          updateControls();
+          setStatus("Host bridge unavailable", "error");
+          addMessage("system", "The OrcaSlicer host bridge is unavailable. The request was not sent.");
+          return false;
+        }
+
+        return true;
+      }
+
+      function setStatus(text, kind) {
+        elements.status.textContent = text;
+        elements.status.className = "status" + (kind ? " " + kind : "");
+      }
+
+      function updateControls() {
+        var blocked = state.busy || state.applying || state.request !== null;
+        elements.send.disabled = blocked;
+        elements.prompt.disabled = blocked;
+        elements.clearChat.disabled = blocked;
+        elements.applyParameters.disabled = blocked || state.parameters.length === 0 || !state.target;
+        elements.apiKey.disabled = blocked;
+        elements.toggleKey.disabled = blocked;
+        elements.rememberKey.disabled = blocked;
+        elements.forgetKey.disabled = blocked;
+        elements.saveSettings.disabled = blocked;
+        elements.model.disabled = blocked;
+      }
+
+      function setBusy(busy) {
+        state.busy = busy;
+        elements.thinking.hidden = !busy;
+        updateControls();
+        if (state.applying) {
+          setStatus("Applying…", "busy");
+        } else if (busy) {
+          setStatus("Thinking…", "busy");
+        } else if (state.apiKeyConfigured) {
+          setStatus("Ready", "ready");
+        } else {
+          setStatus("API key required", "error");
+        }
+      }
+
+      function setApplying(applying) {
+        state.applying = applying;
+        updateControls();
+        if (applying) {
+          setStatus("Applying…", "busy");
+        }
+      }
+
+      function scrollToBottom() {
+        elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+      }
+
+      function addMessage(role, text) {
+        state.hasLocalMessages = true;
+        elements.welcome.hidden = true;
+        var wrapper = document.createElement("div");
+        wrapper.className = "message " + role;
+
+        var meta = document.createElement("div");
+        meta.className = "message-meta";
+        meta.textContent = role === "user" ? "You" : (role === "model" ? "Gemini" : "Orca AI Agent");
+
+        var bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = String(text || "");
+
+        wrapper.appendChild(meta);
+        wrapper.appendChild(bubble);
+        elements.chatLog.appendChild(wrapper);
+        scrollToBottom();
+      }
+
+      function clearParameters() {
+        elements.preview.hidden = true;
+        elements.parameterTarget.textContent = "";
+        elements.parameterNotice.hidden = true;
+        elements.parameterNotice.textContent = "";
+        elements.parameterList.replaceChildren();
+        state.parameters = [];
+        state.target = null;
+        updateControls();
+      }
+
+      function resetChatLog() {
+        elements.chatLog.replaceChildren(elements.welcome);
+        elements.welcome.hidden = false;
+        state.hasLocalMessages = false;
+      }
+
+      function clearMessages() {
+        resetChatLog();
+        clearParameters();
+      }
+
+      function renderHistory(history) {
+        clearMessages();
+        if (!Array.isArray(history)) {
+          return;
+        }
+        history.forEach(function (item) {
+          if (item && (item.role === "user" || item.role === "model")) {
+            addMessage(item.role, item.text);
+          }
+        });
+      }
+
+      function renderParameters(parameters, target) {
+        elements.parameterList.replaceChildren();
+        state.parameters = Array.isArray(parameters) ? parameters : [];
+        state.target = target && typeof target === "object" && typeof target.name === "string" && target.name
+          ? target
+          : null;
+
+        if (!state.parameters.length) {
+          elements.preview.hidden = true;
+          elements.parameterTarget.textContent = "";
+          elements.parameterNotice.hidden = true;
+          elements.parameterNotice.textContent = "";
+          updateControls();
+          return;
+        }
+
+        var targetText = state.target && state.target.name ? state.target.name : "";
+        var sharedSlots = [];
+        if (state.target && state.target.category === "filament") {
+          targetText += " (slot " + Number(state.target.slot || 1) + ")";
+          if (Array.isArray(state.target.shared_slots)) {
+            sharedSlots = state.target.shared_slots.filter(function (slot) {
+              var number = Number(slot);
+              return Number.isInteger(number) && number > 0 && number !== Number(state.target.slot || 1);
+            });
+          }
+        }
+        elements.parameterTarget.textContent = targetText ? "Target: " + targetText : "";
+        elements.parameterNotice.hidden = sharedSlots.length === 0;
+        elements.parameterNotice.textContent = sharedSlots.length
+          ? "Slots " + sharedSlots.join(", ") + " also use this filament preset; applying changes affects those slots."
+          : "";
+
+        state.parameters.forEach(function (parameter) {
+          var card = document.createElement("article");
+          card.className = "parameter";
+
+          var top = document.createElement("div");
+          top.className = "parameter-top";
+
+          var badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = parameter.category === "filament" ? "Filament" : "Process";
+
+          var key = document.createElement("span");
+          key.className = "parameter-key";
+          key.textContent = parameter.key;
+
+          var value = document.createElement("span");
+          value.className = "parameter-value";
+          value.textContent = Object.prototype.hasOwnProperty.call(parameter, "current_value")
+            ? parameter.current_value + " → " + parameter.value
+            : parameter.value;
+
+          top.appendChild(badge);
+          top.appendChild(key);
+          top.appendChild(value);
+          card.appendChild(top);
+
+          if (parameter.reason) {
+            var reason = document.createElement("div");
+            reason.className = "parameter-reason";
+            reason.textContent = parameter.reason;
+            card.appendChild(reason);
+          }
+
+          elements.parameterList.appendChild(card);
+        });
+
+        elements.preview.hidden = false;
+        updateControls();
+        scrollToBottom();
+      }
+
+      function handleMessage(message) {
+        if (!message || typeof message !== "object") {
+          return;
+        }
+
+        switch (message.type) {
+          case "state":
+            var firstState = !state.connected;
+            var previousWarning = state.contextWarning;
+            state.connected = true;
+            state.contextWarning = message.warning || null;
+            if (firstState && !state.hasLocalMessages) {
+              renderHistory(message.history);
+            }
+            if (state.contextWarning && state.contextWarning !== previousWarning) {
+              addMessage("system", state.contextWarning);
+            } else if (previousWarning && !state.contextWarning) {
+              addMessage("system", "The current preset context is available again.");
+            }
+            if (state.contextWarning) {
+              scheduleContextRetry();
+            }
+            if (!state.busy && !state.applying && !state.request) {
+              setBusy(false);
+              if (state.contextWarning) {
+                setStatus("Preset context unavailable", "error");
+              }
+            }
+            break;
+
+          case "ack":
+            if (message.action === "chat" || message.action === "apply" || message.action === "clear_history") {
+              acknowledgeRequest(message.request_id, message.action);
+            }
+            break;
+
+          case "thinking":
+            if (!state.request || state.request.action !== "chat" || message.request_id !== state.request.id) {
+              break;
+            }
+            elements.thinkingText.textContent = message.message || "Gemini is thinking…";
+            setBusy(true);
+            break;
+
+          case "chat_response":
+            if (!state.request || state.request.action !== "chat" || message.request_id !== state.request.id) {
+              break;
+            }
+            finishRequest(message.request_id);
+            addMessage("model", message.reply || "Done.");
+            if (message.warning) {
+              addMessage("system", message.warning);
+            }
+            renderParameters(message.parameters, message.target);
+            setBusy(false);
+            break;
+
+          case "error":
+            var correlatedError = typeof message.request_id === "string" && message.request_id.length > 0;
+            if (correlatedError) {
+              if (!state.request || message.request_id !== state.request.id) {
+                break;
+              }
+              finishRequest(message.request_id);
+            }
+            addMessage("system", message.message || "Something went wrong.");
+            if (correlatedError) {
+              setBusy(false);
+              setApplying(false);
+              setStatus("Something went wrong", "error");
+            } else if (!state.busy && !state.applying && !state.request) {
+              setStatus("Something went wrong", "error");
+            }
+            if (message.code === "missing_api_key") {
+              elements.apiKey.focus();
+            }
+            if (message.code === "apply_failed" && correlatedError) {
+              clearParameters();
+            }
+            break;
+
+          case "history_cleared":
+            if (!state.request || state.request.action !== "clear_history" || message.request_id !== state.request.id) {
+              break;
+            }
+            finishRequest(message.request_id);
+            resetChatLog();
+            setStatus("Chat history cleared", "ready");
+            break;
+
+          case "apply_result":
+            if (!state.request || state.request.action !== "apply" || message.request_id !== state.request.id) {
+              break;
+            }
+            finishRequest(message.request_id);
+            setApplying(false);
+            setStatus(
+              message.dirty ? "Preset applied (not yet saved)" : "Preset applied",
+              "ready"
+            );
+            var sharedSlots = Array.isArray(message.shared_slots)
+              ? message.shared_slots.filter(function (slot) {
+                  return Number(slot) !== Number(message.slot_number);
+                })
+              : [];
+            var sharedNotice = "";
+            if (sharedSlots.length === 1) {
+              sharedNotice = " Slot " + sharedSlots[0] + " also uses this preset.";
+            } else if (sharedSlots.length > 1) {
+              sharedNotice = " Slots " + sharedSlots.join(", ") + " also use this preset.";
+            }
+            if (message.selection_changed) {
+              sharedNotice += " OrcaSlicer switched the active preset.";
+            }
+            if (message.slot_assignment_changed) {
+              sharedNotice += " OrcaSlicer changed the filament assignment for slot "
+                + Number(message.slot_number) + ".";
+            }
+            var persistenceNotice = message.dirty
+              ? " The preset remains unsaved until you save it in OrcaSlicer."
+              : " The preset already matches its saved state.";
+            addMessage(
+              "system",
+              message.target_name
+                ? "Changes were applied to preset “" + message.target_name
+                  + "”." + persistenceNotice + sharedNotice
+                : "Parameter changes were applied."
+            );
+            clearParameters();
+            break;
+
+          default:
+            break;
+        }
+      }
+
+      function submitPrompt() {
+        if (state.busy || state.applying || state.request) {
+          return;
+        }
+
+        var prompt = elements.prompt.value.trim();
+        if (!prompt) {
+          elements.prompt.focus();
+          return;
+        }
+
+        var apiKey = elements.apiKey.value.trim();
+        var model = elements.model.value.trim();
+        if (!apiKey) {
+          addMessage("system", "Enter a Google AI Studio API key first.");
+          elements.apiKey.focus();
+          setStatus("API key required", "error");
+          return;
+        }
+        if (apiKey.length > MAX_API_KEY_LENGTH) {
+          addMessage("system", "The API key is too long.");
+          elements.apiKey.focus();
+          setStatus("Invalid API key", "error");
+          return;
+        }
+        if (!MODEL_PATTERN.test(model)) {
+          addMessage("system", "The Gemini model name is invalid.");
+          elements.model.focus();
+          setStatus("Invalid model", "error");
+          return;
+        }
+
+        clearParameters();
+        setBusy(true);
+        if (!startRequest("chat", {
+          prompt: prompt,
+          api_key: apiKey,
+          model: model
+        })) {
+          state.busy = false;
+          elements.thinking.hidden = true;
+          updateControls();
+          return;
+        }
+        addMessage("user", prompt.split(apiKey).join("***"));
+        elements.prompt.value = "";
+      }
+
+      elements.send.addEventListener("click", submitPrompt);
+
+      elements.prompt.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          submitPrompt();
+        }
+      });
+
+      elements.toggleKey.addEventListener("click", function () {
+        var showing = elements.apiKey.type === "text";
+        elements.apiKey.type = showing ? "password" : "text";
+        elements.toggleKey.textContent = showing ? "◉" : "◎";
+      });
+
+      elements.apiKey.addEventListener("input", function () {
+        state.apiKeyConfigured = Boolean(elements.apiKey.value.trim());
+        if (!state.busy && !state.applying) {
+          setStatus(state.apiKeyConfigured ? "Ready" : "API key required",
+            state.apiKeyConfigured ? "ready" : "error");
+        }
+      });
+
+      elements.rememberKey.addEventListener("change", function () {
+        if (elements.rememberKey.checked && !elements.apiKey.value.trim()) {
+          elements.rememberKey.checked = false;
+          addMessage("system", "Enter an API key before saving.");
+          elements.apiKey.focus();
+          return;
+        }
+        if (!elements.rememberKey.checked) {
+          if (removeStorage(STORAGE_API_KEY)) {
+            state.apiKeyStored = false;
+            elements.forgetKey.hidden = true;
+          } else {
+            elements.rememberKey.checked = true;
+            state.apiKeyStored = true;
+            elements.forgetKey.hidden = false;
+            addMessage("system", "The API key could not be removed and remains stored in browser storage.");
+            setStatus("Storage unavailable", "error");
+          }
+        }
+      });
+
+      elements.saveSettings.addEventListener("click", function () {
+        var model = elements.model.value.trim();
+        var key = elements.apiKey.value.trim();
+
+        if (!MODEL_PATTERN.test(model)) {
+          addMessage("system", "The Gemini model name is invalid.");
+          elements.model.focus();
+          setStatus("Invalid model", "error");
+          return;
+        }
+        if (key.length > MAX_API_KEY_LENGTH) {
+          addMessage("system", "The API key is too long.");
+          elements.apiKey.focus();
+          setStatus("Invalid API key", "error");
+          return;
+        }
+        if (elements.rememberKey.checked && !key) {
+          addMessage("system", "Enter an API key before saving.");
+          elements.apiKey.focus();
+          setStatus("API key required", "error");
+          return;
+        }
+
+        var modelSaved = writeStorage(STORAGE_MODEL, model);
+        var keySaved = true;
+        if (elements.rememberKey.checked) {
+          keySaved = writeStorage(STORAGE_API_KEY, key);
+          if (keySaved) {
+            state.apiKeyStored = true;
+          }
+        } else {
+          keySaved = removeStorage(STORAGE_API_KEY);
+          if (keySaved) {
+            state.apiKeyStored = false;
+          } else {
+            elements.rememberKey.checked = true;
+            state.apiKeyStored = true;
+          }
+        }
+
+        state.apiKeyConfigured = Boolean(key);
+        elements.forgetKey.hidden = !state.apiKeyStored;
+        if (modelSaved && keySaved) {
+          setStatus("Settings saved", "ready");
+        } else {
+          if (!keySaved && !modelSaved) {
+            addMessage("system", "Browser storage is unavailable. The current API key is used only while this panel remains open. Any previously saved API key remains in browser storage and may be loaded when the panel opens again.");
+          } else if (!keySaved) {
+            addMessage("system", "The API key could not be updated in browser storage. Any previously saved key remains there and may be loaded when the panel opens again; the current key is used only while this panel remains open.");
+          } else {
+            addMessage("system", "The model could not be saved; it applies only while this panel remains open.");
+          }
+          setStatus("Storage unavailable", "error");
+        }
+      });
+
+      elements.forgetKey.addEventListener("click", function () {
+        var removed = removeStorage(STORAGE_API_KEY);
+        if (!removed) {
+          state.apiKeyStored = true;
+          elements.forgetKey.hidden = false;
+          addMessage("system", "The API key could not be removed and remains stored in browser storage.");
+          setStatus("Storage unavailable", "error");
+          return;
+        }
+
+        state.apiKeyStored = false;
+        elements.apiKey.value = "";
+        elements.rememberKey.checked = false;
+        elements.forgetKey.hidden = true;
+        state.apiKeyConfigured = false;
+        setStatus("API key required", "error");
+      });
+
+      elements.model.addEventListener("change", function () {
+        var model = elements.model.value.trim();
+        if (!MODEL_PATTERN.test(model)) {
+          addMessage("system", "The Gemini model name is invalid.");
+          setStatus("Invalid model", "error");
+          return;
+        }
+        if (writeStorage(STORAGE_MODEL, model)) {
+          setStatus("Model saved", "ready");
+        } else {
+          addMessage("system", "The model applies only while this panel remains open.");
+          setStatus("Storage unavailable", "error");
+        }
+      });
+
+      elements.clearChat.addEventListener("click", function () {
+        if (!startRequest("clear_history")) {
+          addMessage("system", "The OrcaSlicer host bridge is unavailable. Chat history was not cleared.");
+        }
+      });
+
+      elements.applyParameters.addEventListener("click", function () {
+        if (state.busy || state.applying || state.request || !state.parameters.length || !state.target) {
+          return;
+        }
+        setApplying(true);
+        if (!startRequest("apply", { parameters: state.parameters, target: state.target })) {
+          setApplying(false);
+          return;
+        }
+      });
+
+      loadStoredSettings();
+
+      if (!bridge || typeof bridge.onMessage !== "function") {
+        setStatus("Host bridge unavailable", "error");
+        elements.send.disabled = true;
+        elements.saveSettings.disabled = true;
+        return;
+      }
+
+      bridge.onMessage(handleMessage);
+      send("ready");
+      scheduleContextRetry();
+      window.setTimeout(function () {
+        if (!state.connected || state.contextWarning) {
+          send("ready");
+        }
+      }, 250);
+      window.setTimeout(function () {
+        if (!state.connected || state.contextWarning) {
+          send("ready");
+        }
+      }, 1000);
+      window.setTimeout(function () {
+        if (!state.connected || state.contextWarning) {
+          send("ready");
+        }
+      }, 3000);
+    })();
+  </script>
+</body>
+</html>

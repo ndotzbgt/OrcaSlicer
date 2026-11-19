@@ -18,6 +18,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <cstddef>
+#include <libslic3r/Config.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/PresetBundle.hpp>
 #include <libslic3r/TriangleMesh.hpp>
@@ -25,6 +26,7 @@
 #include <slic3r/GUI/AuiPaneLayout.hpp>
 #include <slic3r/GUI/OptionsGroup.hpp>
 #include <slic3r/GUI/Widgets/WebHosting.hpp>
+#include <slic3r/plugin/host/PluginHostPresets.hpp>
 
 #include <map>
 #include <utility>
@@ -50,6 +52,8 @@
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include <pybind11/detail/common.h>
+
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -230,6 +234,8 @@ TEST_CASE("Plugin host API exposes staged preset update transactions", "[PluginH
 
     CHECK(has_attr(transaction_type, "set"));
     CHECK(has_attr(transaction_type, "commit"));
+    const std::string commit_doc = transaction_type.attr("commit").attr("__doc__").cast<std::string>();
+    CHECK(commit_doc.find("expected_current") != std::string::npos);
     CHECK(has_attr(result_type, "target_name"));
     CHECK(has_attr(result_type, "selection_changed"));
     CHECK(has_attr(result_type, "slot_assignment_changed"));
@@ -257,6 +263,29 @@ TEST_CASE("Plugin host API exposes staged preset update transactions", "[PluginH
         CHECK(error.matches(PyExc_RuntimeError));
         CHECK(std::string(error.what()).find("OrcaSlicer application is not initialized") != std::string::npos);
     }
+}
+
+TEST_CASE("Preset transaction conflict check prevents overwriting a concurrent setting edit", "[PluginHost]")
+{
+    Slic3r::DynamicPrintConfig config;
+    config.set_key_value("layer_height", new Slic3r::ConfigOptionFloat(0.2));
+
+    REQUIRE_NOTHROW(Slic3r::verify_expected_current_values(config, {{"layer_height", "0.2"}}));
+
+    // Model a user edit after the plugin captured the expected value. The production commit
+    // performs this check immediately before applying its batch on the UI thread.
+    config.set_key_value("layer_height", new Slic3r::ConfigOptionFloat(0.3));
+    bool applied = false;
+    try {
+        Slic3r::verify_expected_current_values(config, {{"layer_height", "0.2"}});
+        config.set_key_value("layer_height", new Slic3r::ConfigOptionFloat(0.25));
+        applied = true;
+    } catch (const std::runtime_error& error) {
+        CHECK(std::string(error.what()).find("changed while the update was pending") != std::string::npos);
+    }
+
+    CHECK_FALSE(applied);
+    CHECK(config.opt_serialize("layer_height") == "0.3");
 }
 
 TEST_CASE("A settings group resolves an option's id from its option map", "[PluginHost]")

@@ -45,7 +45,7 @@ tx = orca.host.preset.filament.begin_update(
     preset_name="Generic PLA"
 )
 tx.set("filament_flow_ratio", "0.98")
-tx.set("filament_retract_length", "0.8")
+tx.set("filament_retraction_length", "0.8")
 result = tx.commit()
 
 # Process and printer default to their active presets. A caller can request a
@@ -53,16 +53,25 @@ result = tx.commit()
 tx = orca.host.preset.process.begin_update(
     preset_name="0.20mm Standard"
 )
-tx.set("layer_height", "0.2")
-tx.commit()
+tx.set("layer_height", "0.25")
+# Optional: reject the commit if the user changed layer_height after the
+# proposal was made. The check and the write happen atomically on the UI thread.
+tx.commit(expected_current={"layer_height": "0.2"})
 ```
+
+`commit()` optionally accepts an `expected_current` mapping from setting keys to
+serialized values. Before applying the batch, the host checks every mapped value
+against the live edited preset. The checks and the batch write run in one UI-thread
+operation, so a concurrent user edit cannot be overwritten between validation and
+commit. A mismatch rejects the whole batch without applying any staged setting.
 
 The example is the API contract, and the Python bridge provides it. `begin_update()`
 is synchronous: it blocks the background Script worker until the target selection and
 any unsaved-edit dialog settle, then returns the bound transaction. Orca's UI thread
-stays responsive because the Script capability runs on its own worker. `set()` and
-`commit()` run synchronously on that same worker. The Script worker and its optional
-coroutine loop are described in
+stays responsive because the Script capability runs on its own worker. `set()` runs
+on that worker. `commit()` is synchronous from the caller's perspective: it blocks
+the worker while the host validates and applies the batch on the UI thread. The
+Script worker and its optional coroutine loop are described in
 [python-plugin-async-bridge.md](python-plugin-async-bridge.md).
 
 ### Target resolution
@@ -124,12 +133,15 @@ the active preset is the target.
 
 `set(key, value)` stages a serialized config value and does not mutate the preset.
 The transaction is the boundary for a related group of changes, avoiding
-intermediate partially-updated states. `commit()` runs synchronously on the background
-Script worker. At commit, the API validates keys and values against the target preset
-type and applies the batch through `Tab::apply_preset_config_values`, the existing tab
-and settings-group update path. Existing setting-specific validation, correction, and
-callbacks remain authoritative; plugin updates do not create a parallel setter with
-different behavior.
+intermediate partially-updated states. `commit()` is synchronous from the caller's
+perspective and blocks the background Script worker while the host validates and
+applies the batch on the UI thread. At commit, the API validates keys and values
+against the target preset type and applies the batch through
+`Tab::apply_preset_config_values`, the existing tab and settings-group update path.
+When `expected_current` is supplied, its values are checked against the live edited
+preset in the same UI-thread operation that applies the batch. Existing
+setting-specific validation, correction, and callbacks remain authoritative; plugin
+updates do not create a parallel setter with different behavior.
 
 A successful commit updates dirty state and downstream configuration/Plater state
 once for the batch. The edited preset remains unsaved; persistence continues through
@@ -152,11 +164,12 @@ preset.
 ## Outcomes and consistency
 
 The API distinguishes target resolution failures, invalid setting/value, user
-cancellation, stale filament-slot mapping, and commit failure. A result identifies
-the target preset, whether preset selection changed, and (for filament) whether the
-slot assignment changed and which slots share the edited preset. A canceled
-selection applies neither the requested slot assignment nor staged target changes;
-a failed commit applies none of the staged target settings.
+cancellation, stale filament-slot mapping, a changed expected current value, and
+commit failure. A result identifies the target preset, whether preset selection
+changed, and (for filament) whether the slot assignment changed and which slots
+share the edited preset. A canceled selection applies neither the requested slot
+assignment nor staged target changes; a failed commit applies none of the staged
+target settings.
 
 Filament slot assignments can change between `begin_update()` and `commit()`. The API
 detects that and rejects a stale operation instead of silently editing the new
@@ -197,7 +210,9 @@ the background Script worker while any selection dialog settles.
 
 The transaction API is implemented. The current plugin surface exposes `begin_update()`,
 `PresetTransaction` with `set()`/`commit()`, and the per-setting `update()` compatibility
-shorthand. For filament, `update_filament_slot()` resolves the preset already assigned
+shorthand. `commit(expected_current=...)` provides an atomic conflict check for
+values that must not change between staging and commit. For filament,
+`update_filament_slot()` resolves the preset already assigned
 to a slot, selects it through `Tab::select_preset()`, and applies one setting through
 `Tab::apply_preset_config_values()`; it does not change the slot assignment.
 

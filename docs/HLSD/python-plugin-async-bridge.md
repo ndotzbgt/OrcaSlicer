@@ -169,8 +169,9 @@ calls use from the Script worker. It forwards to `run_on_ui_blocking`:
   `GUI::wxGetApp().CallAfter`, and blocks on `future.get()`.
 
 Because the Script capability owns a worker thread, blocking there does not freeze the UI. The same
-primitive is used by `begin_update()`, `set()`/`commit()`, `reload_local_bundle()` and
-`list_bundle_ids()`.
+primitive is used by `begin_update()`, `commit()`, `reload_local_bundle()` and
+`list_bundle_ids()`. `set()` only stages an in-memory value on the worker and does not
+marshal UI work.
 
 ### Synchronous `begin_update()`
 
@@ -191,8 +192,10 @@ dialog are not rolled back. No GUI or preset pointer outlives the call: the tran
 copied category/name/slot values.
 
 `set()` stages a serialized value without mutating the preset, and `commit()` applies the batch
-through `Tab::apply_preset_config_values` on the UI thread. Both are synchronous and, per their
-bindings, valid only on the background Script worker.
+through `Tab::apply_preset_config_values` on the UI thread. When `commit()` receives
+`expected_current`, it checks those serialized values against the live edited preset in
+the same UI-thread callback immediately before applying the batch. Both methods are
+synchronous and, per their bindings, valid only on the background Script worker.
 
 ### Cancellation
 
