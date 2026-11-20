@@ -1,37 +1,68 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["google-genai", "httpx"]
 #
 # [tool.orcaslicer.plugin]
-# id = "orca-ai-agent"
 # name = "Orca AI Agent"
 # description = "Chat with Gemini and preview safe OrcaSlicer preset parameter changes."
 # author = "OrcaSlicer contributors"
-# version = "0.1.0"
-# type = "script"
+# version = "0.3.0"
 # ///
-"""Gemini-backed Docked Panel for OrcaSlicer.
+"""Gemini-backed Docked Panel for OrcaSlicer (stdlib only: no PEP 723 dependencies, no asyncio).
 
 The API key is handled by the panel's WebView. When the user explicitly asks
 OrcaSlicer to remember it, the key is kept in that WebView's local storage; the
 Python backend never writes the secret to disk.
 """
 
-import asyncio
 import base64
 import json
 import math
+import queue
+import random
 import re
+import sys
+import threading
+import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import orca
 
 
+def _orca_submodule(name: str) -> Any:
+    """orca.<sub> is documented as a plain attribute, but some builds only expose it via import."""
+    sub = getattr(orca, name, None)
+    if sub is None:
+        try:
+            import importlib
+
+            sub = importlib.import_module(f"orca.{name}")
+        except ImportError:
+            sub = None
+    return sub
+
+
+_script = _orca_submodule("script")
+if _script is None:
+    raise ImportError("This OrcaSlicer build does not expose orca.script")
+_SCRIPT_BASE = _script.ScriptPluginCapabilityBase
+
+
+# Single source of truth for the version. The PEP 723 block above must carry the same value (the
+# test suite checks it). It is shown in the panel header and sent with every state message.
+PLUGIN_VERSION = "0.3.0"
+__version__ = PLUGIN_VERSION
+VERSION_PLACEHOLDER = "__PLUGIN_VERSION__"
+
 PLUGIN_TITLE = "Orca AI Agent"
 GEMINI_API_ORIGIN = "https://generativelanguage.googleapis.com"
+# Fixed URL on purpose: the host grants network access per URL, and the model goes in the body.
+GEMINI_CHAT_URL = GEMINI_API_ORIGIN + "/v1beta/openai/chat/completions"
+# Model listing, also a fixed URL without a query string (see the note above).
+GEMINI_MODELS_URL = GEMINI_API_ORIGIN + "/v1beta/openai/models"
 DEFAULT_MODEL = "gemini-3.8-flash"
 
 MAX_HISTORY_MESSAGES = 24
@@ -44,177 +75,654 @@ MAX_PARAMETERS = 12
 MAX_REQUEST_ID_LENGTH = 128
 FILAMENT_SLOT = 1
 
-PLUGIN_DIR = Path(__file__).resolve().parent
-PANEL_FILE = PLUGIN_DIR / "ui" / "panel.html"
+# Unique, human-readable capability name. It must not contain ";" (reserved by the host).
+CAPABILITY_NAME = "Orca AI Agent: Gemini Preset Assistant"
+
+# --- Gemini request limits -------------------------------------------------------------------
+# Gemini's OpenAI-compatible endpoint over stdlib urllib (like the PrintPurr reference plugin).
+GEMINI_HTTP_TIMEOUT_SECONDS = 60
+# Outer deadline for one chat request (all HTTP attempts). Below the panel's 90 s response timer.
+GEMINI_TOTAL_TIMEOUT_SECONDS = 75
+# Thinking tokens count against the output limit on thinking models, so leave plenty of room.
+GEMINI_MAX_OUTPUT_TOKENS = 16_384
+
+# --- Transient errors (HTTP 500/502/503/504, connection resets, socket timeouts) ----------------
+# Up to MAX_TRANSIENT_RETRIES retries with exponential backoff (about 1 s, 2 s, 4 s) plus jitter.
+# Authentication, quota (429) and request errors (4xx) are never retried.
+MAX_TRANSIENT_RETRIES = 3
+RETRY_BASE_DELAY_SECONDS = 1.0
+RETRY_JITTER_FRACTION = 0.25
+TRANSIENT_HTTP_CODES = frozenset({500, 502, 503, 504})
+
+# --- Model list ----------------------------------------------------------------------------------
+MODELS_HTTP_TIMEOUT_SECONDS = 15
+MODELS_TOTAL_TIMEOUT_SECONDS = 25
+MAX_MODELS = 100
+# Not usable for JSON chat: embeddings, media generation, speech, realtime, agents, ...
+MODEL_EXCLUDE_TOKENS = (
+    "embedding", "aqa", "imagen", "veo", "image", "tts", "audio", "live", "robotics",
+    "computer-use", "deep-research", "learnlm", "vision",
+)
+
+# --- Worker polling ----------------------------------------------------------------------------
+# How often a chat worker checks its cancel flag while the HTTP thread is running.
+WORKER_POLL_SECONDS = 0.1
+
+# --- Soft guardrails -----------------------------------------------------------------------------
+MAX_RELATIVE_CHANGE = 0.5
+MIN_REDACTABLE_SECRET_LENGTH = 8
+
+try:
+    PLUGIN_DIR: Path | None = Path(__file__).resolve().parent
+    PANEL_FILE: Path | None = PLUGIN_DIR / "ui" / "panel.html"
+except (NameError, TypeError, OSError, RuntimeError, ValueError):
+    # __file__ is undefined when the host executes the plugin source from a string (exec/importlib
+    # without a spec), or it may be unusable. The embedded copy of the panel is then the source.
+    PLUGIN_DIR = None
+    PANEL_FILE = None
 
 # OrcaSlicer's .py installer copies only the entry file. Keep a compressed copy of the panel so a
 # side-loaded plugin.py remains self-contained; development checkouts use ui/panel.html directly.
 # EMBEDDED_PANEL_HTML is generated from that file and is verified by the package test.
 EMBEDDED_PANEL_HTML = (
-    "c-q}P%aR+%k@xwEW^3&LBme`<gPa#e9#JEUVNzmf=-AaVxD!3-0??jDH{9Kr;aFybPLA+p4}0-"
-    "tcMlsI`w{y&{F2SASJ$)A0BKok%fSJ<tFp2(v+`A0g|kO-KB*p-"
-    "B$!u=^nB+G{{(52&Bh_gLVQ4?_<Sb_&K9JKg2_B8N>Yu(RW<D&h4qUpT99#gmyr8qUQ}T)$+L=N(C|KqtNA!4cgckG>6c!RWJ#4o"
-    "X}_FADH)F#m@27Ka{g^GiGqt~!Nm-EpY5`T_`0kf*ry;kDe}AuexRQN7%9yQ05vBIauUQ*aeK<&^!qonli)5YI{khQaN%n&_+<2C"
-    "bUcc?b)%`?Xo`)dd((sI6Q$8&RgqY0N1s5`<4Lq1O_ioMc@dLBADBLZ#`_2R(ZRmbIGRjgqFQ722pT`098IQEtFei&e2RF}|0!L{"
-    "RWXewK$uVV_Vym{#nzjC5hW!~?UTLZJ+l9}ZV-bM;5-26lba_uYEKxkEaA=LC-MIANO?1l;{5(37zU%g<=bF?2>%qbo2WDF1^oYm"
-    "y(5m^yB+%HQ_0Dj{B6HX{*YuaKSnVi+*_^j>v<B#Bzq(K#7VhKqlc3q%QF%@N){-"
-    "7QC4ZaP^f!5Y>4<l_NCHz5{!n!Ux+EpNiv&P`m;q;%#sWyB_8B=q?o2SPlk<neiKb@XGOlsq@di)BrB+xis#drP6G|CX^z~C7D@V"
-    "`3ucZ|(T|qPl=RDovLcIK@I{(rw=bf}75)AdZ4zFQSx$oAJ_~z68D(X^Bt=pS1%(fE2B8@3FW-vC0EqPE{09ezI)<yN$}>j9BwMa"
-    "3_OT*wtEeE6hWrV%n8T2j1A@M6#r&iQcm1?vZR!Smm5o5e$~;Ztre+}Iak2u5eNxYN8O1RbHF!qFRdQ-ol!)3gPe6wi;&D{~DM4@"
-    "LAPUnYg*VV^xF`b>m82Ks%V?5R585-@WttZY<*9=vCv%jjlPs?~Cm_$!O-"
-    "kZ!O;I`)tcU_xlflC4j0Qtv5ph7#q)P6H50XUZgndk-ihSPz0y<%d{x!!qT>yGNN<sdK)FyoLuto+4M-E_vl7K+~-"
-    "TdI@zlZS@%O%K{SkIE5T5tBuHHkq2!}bly<I5hElez5GXHq_f&LvFM|8`hA8mMdX@lw}$bh*7oBRvjry@hXj*7IdlmiI7-"
-    "cxSCkhpubG0ZWbfmYv3fre&9}D%3PgVY}9rN-J$OQS(3zjBhz@Mkz@f$^8Qd_kkP1v5O-"
-    "o(|ocjb#k+3ib1o5)zVLI6|0H=?FpMX8Xon6(E%9Ey~9JaoFik=TTEUgnbhEqAJ>yvL~m=&e&~|%W7L7li-Is=1ie%x;H7Ef4!{K"
-    "226$E^QXk;wKG>rrs+fL}--"
-    "8T9t14&z0Gfai`UInC(N$jHKc^cSXJyJm9ZU3FK}lPPPE#W18KucA>nDIJV2F&V_5Cbbo@g|Y#2SqZiy@sA&@+qmYs0_31nOx%%b"
-    "O_-Pr!F`A};jXfkVG3&yWmE=2Wt8x4u;}ZD80@5ky6QhG3vsXLN8F6L4d-"
-    "l>%PvQFJ(&K6b7d)|7qgHfmG;_@0yE$<PoN8fx@!(tL8OEhtXTp-"
-    "#7v?qH6X9+>a3zxDDkoJZMS_x3oh2OeA>AIi~FQUR;`B^q36oCd=YS?Dt<S2uJratxot+F;OBv_>^rsB-"
-    "!>IFhExvP?=TdUKFSiX2t&_eHccP^+R!QIM#Z#6mwfRE&fNVYvjsZ&i)Tc2awMeC!chzj5dC#$qQYwT2&?S_4q=vBz=Zp;*`LXmB"
-    "&K4;ExJLR&)3$U)aR%FU{LX!6dR$1qIQp?eHc6nWtughiW8gHX_;y?y=<OvD<6RI7EC3AOr>OQ{b(vQpP&M4&iLNE-Lk=!T>=qEz"
-    "|lVW%Abpp~e4maVQ$hE3XJPiPY^zDm%rS}q9$qK4CjzI{OeJczHH(lQtBTtUDGfS|<Rhk8?WPsWgb!7bL2;d^Oao&J42c60+A1Nz"
-    "7b<-mM}#e9rCdx)w697^<DKFoixuwNF*T{L;<Ll8yW3&GFOp*L9H*Ms%JWKI+-"
-    "wjOhQ(T6o!R2ufG3%Sk`ZX=e?NL!zSE*!#|qK`bR5#e5jUug-Li##T&o2!2J6~L|*8QKdRR(D>vmV+7-"
-    "r%G_U4FecFvBX_yFtDGhW^>ZKCT>*q!OL`p4pyS8|8Sx?iM7&H7E?JX@-"
-    "*$=ka={MARo#_o>y~y+<THv@&&QxIReC0ajQqz|4=LM^-"
-    "VW5@>CsCM(Zp#=T=rlp3Odvc2^u{XWC8*1~>uHjI^+Q2WnWT;b2P%hdNl5N*wjORaqs|2O;bvi=CbNbX#Cs4JUxztZr^n;_?@d_k"
-    "Ljs%aIYqez?GRrGlr;yG~zjS&)A1%_-"
-    "{$AHq_~9`5I)APvMeC;oA=rEN4M$AaaToAEGRHU$Z{!zQzq?fkoa1Gj3PWVeZHX>DbajU*4<u{hq|%Mw_|c~#mNCK)x^DxwsdeP{"
-    "Q?%-bE>vHYRsstN%<tkWZF1tZFmMZ~<N<ti-"
-    "+I1_s?em2EDIzm%yeb5p4s&b)ul2!BmWS*pPXRppPOPGDIaS_c5j}FT<{r4OD@9W)vbxR(mMFhgiu@+s2zvw|^5C33}DEL85Oz$0"
-    "@dNSa{?kNCf0QL{HZX;ix{vM{ydAHiRBe(;qsVnKE9S`mJ)-<e~k<?H9NC5}OssAyuVXmcfB$m!&+tt-Zp6}H;58ZK8m($+56o`Z"
-    "#A^$OY0k?HVs;zShn>*hh8rIjSLllrqi0#S^SvdN{(ng<5r}5rV^kLCKJ${;$RSTcN<(P34ZIdmb+tYfYd#Kx)=c6X;Y-"
-    "LgvG0B%7CjE`kkUbu#sP=h8zj$i9!K<Xd$g`ZvRxh~v>IHo1e@AAkG%9+*3zDUIFL;_~K+UM^1+wj5IjdJs`YuXWq*WH_r<j*7iQ"
-    "38^t0z@}6;uK)?lw~;y}z-)V7s_ctT^uOtb82~!BRQ=o98`E=U18Eu_0CK(?<|9E%VZ4np%Y9j;$o;a+Xm_n+%{U4Y-"
-    "|2w$zcFY~$YDp(E*)#lC&)Bga0^QPV!QDvnQ#k$$xxaS{a`)pa=>0%dCV%t*6xiYiiBC-"
-    "G>=t8M@CVVt=bqngL=V)|Exho$b`3&$)7&USg}*x4?tWjn)a8(LEqCwIXFG)g%RqvbMW)n#YgU*Rv<H~voVgS&KL5EV((XF7WvR>"
-    "g{h=NHe;cA=fCkFv`oVd9u0v+@m|)UOo)Vsj@v|24sMQ1Jf8{|d10RSK>|fw3p>CxEtK+arXeVq&3{!~l{e=R-"
-    "LH|61fJk>Aci`(|W<Y0>vT{*Mla%O!%Eq$Dby&Z9~~Q!=z+z_#G|H#t47E^t=k@F_yTI>U;SmL|ru=jZSL^uK4j3<~GjE@RU<6P2"
-    "?PF$I*wj8I^8a6o84Y?{ng1r0Sc1}l_jX*mu@$<&3giV75)<TvC2c#-"
-    "Eb2$KQoRkezfJh*uIEC3JSY?rq7u(Hl%E3yD>Ske>e$>9e^?E+PFs7q2XP~$M4PQ##Fg59P`Q$RF=pvWXJTP`WdX4QNg9t@8khin"
-    "^po~J;&ariQVm_K;PSA{@7K(nahrZBt8XE14s-"
-    "=@q~7=ASe6_6L`_K={O6EU`{i^@T7zw`Hh`Liw_w&=4jJ1(BossGR?2b9V_mK9_{7B{3&_(t2`<ZtyZ;K5|)SJ54zluokX1`8!%3"
-    "71t~U^1@*;Q?5#N%61*vwRBNdkAhwP|m?{#9h#92tb*jDQXI<Kv*G0Qdw13WGP8ygK69qJ^zj@z-"
-    "4mKR2iX!iCl5w$wB;}>BLQlezr(s5w>5Ov`={c0{_^=sTs!F1xndaK;77JIHMZ2zdtzYPhpgKs4k$<aA=9By#^gC)ic|rn2EYYq)"
-    "hjFWnK0_%>&E|d|}jxz$cU$cpPOh?y6vEnXm-"
-    "368kM!gaSkdpI3Rn)fKZK1BuU4Xj85~g*shC30Lnh*z<fA)(e4cBM9A^+@Y2N52+%C_ExYAEd#_e=Mt>=uCR+G)j<+*D;#DpC+QM"
-    "AplZ(aRY{HC0Bt>OCp%u0w?TB1uaF!GO#b&P@Cz%T6tD`*w-?|}0-k9PRY^g9zakJ3m(i3+^35^JS>l-7{TSHB^lTSNB*-"
-    "PECGwSWUiAaMuyzzxAR1w2%;{B}CFf_miTOv<0t}Ek_A8WU;VL9B4gQ=O@w%%ji_&@`96sl;7Eb<M<?c%v^2^u81eK+%r-"
-    "d{pXz$#D1eSeI6$3Fp8J)eN*`FFeBP|r3TY6GaT3Ac{Ajd3C^(RVT&o8i@M_U=PED`vI=5`#2W&8yv(Hbz%VbM5%VCE(~*F?}*w9"
-    "`DVYByE{9`)jr5eQ>5suNAW9St1{PInkC-"
-    "$tm|Ahat9W>|y8A^`UtC`lF3esCY9X^Gl6i1@Y`!BtkS(h3C7hOP?L3%;d=y)T~OTm{B1#}fl2#kR?4$z-"
-    "W;I%spvoxmsO@Bj0^P0y0ik;V&hk(`y2B3V|fNoTss*n;WQK~jh$fhi}GDm)cB9)dzF<HmS@49Y8u^ZNmo_Ma;6uU>uo-"
-    "NmmjuR+sa|K{?0Xc%IXL6lra7#R$}CA>yA$JOb@w_jd9x4SS4r*`=A@~eyAK7UnruuPrW`o+aR34E@fUw-rJS6@RHbRe}x2<rOf#"
-    "j97B-"
-    "+cq`cmL(}MgO0p{vU?@<2Uuk!FB)555wN^@w<Q6Rl8q2{mu2OXD=?l{Via11^prF9I6eTetq%k`n$`km*0MKb*VQ!9vW>gUcP+(y"
-    "{Ga1&}>aoaM`k|gqL+>$>N@qAkHT%d^-STa>*Kg@$f9}h`^}ZlU-"
-    "!+)6lC9kd%(h%Wvq#!vLj=^t~H;)&9BCQE^Wjx~fjB(pkEZ4P9$jQ|YLBhfOq9ok*oS72t+`Ou$uEFh`|{5!{tgI&rt7p_6b-"
-    "R7P-v+QbK8_8r~OKDX#f&A8H?TgQf;!V;^Ubeq}K*|4rIAk4nC0m3bz3kX`bHXx`K)K-"
-    "jUxEq&_ZsIi}qS0%lA+?IC91~3L`Q;alNLQqwG`)}Nf@m5B3ocIr8YUPMqvB+|n6Uf{p47A7pk@5WsK{u?Y?Y>_Zh6Xc9ggm-!4-"
-    "Jsj+fjcHi7aXzav%g@G4ng3R-W#`#sH989lr-tY6Ke@_9aqQf}W%Ys{s>*4J;8CBvl_N3uvPZ7>$gUa<hW17@<T5WG^3A2B4WRgn"
-    "opoFY=ZCo=X~MHUo7oz{F8OrmNs4?47twd(?g$SEDn6sAP;zJM4>!L!F=&L(tSc$PJu0>Y_{6vhu5&4O~I%`^&{8E8pw*8~^<2d#"
-    "es<kOsq3W<fy>8JqNs>Ro^K49gll4W>l3f|Z&%ZmksnST&HYbc-Bp9kO^E?~fuAPnp7$rRH*YWH9MQinHS4tj7lcKBsFL4;#7U~7"
-    "E9cIU=Ayi->P#s0HGOcFysofXVSA_G&ytZB$7?r0<jmmb7`g-"
-    "FoW<S8@;{~C!U>8Vd0*}!BgewM+!6UjtXVEt_L;QYvf*>(nxY<Ox{oQe%xpA+cnIOb{-"
-    "Yz?i@3VT6#0U;3ULj9~*W^X6?Dvj~HCZ-KJa2lDx=P1caN78W+YD9RaEF;Ilpt&{A(xCA`SC?$H7s$01G7Ks(7;1~IN0_OzCuLdb"
-    "V97^|?ph#ZGDJnj;DlR_%sJ}>^ywk=8afgE+ym?PfO<(CkIDv*8~^x68qnrb9!L%#s;@+-"
-    "{Adi3oB$hcq8u4hMHMM{DFMUhg#SfLtD@t;G6=rC`5kyD1CYE@Ho&ED8BOL&kbG;)H6Qpjym|wp^Un0EM$E1YbJNV&gz0ejKdpJ8"
-    "q271Q5u#2~+2L-"
-    "H$z1+;5KV4rL&`|>B)Ts9N#SC<d{tRpjVT&%#~%MgN24I+GS5n~EiPJrCqnuN<JMkNMx9Oy1KjPd5w4>*p}L*HXXCoQM)L1VY?$T"
-    "uo$jE@ufParv(EnGZtz(U_CxsB1xagp>R-rUD&tj3o+|Ef$7D8xZ+XxjIy0nQ9P`1EnI-TI1!r6ts%98EN4O4>%~>RZ%1DF2LlAR"
-    "yQ~egwQ*63*2|N_@D9|3w2{q6ki&o1y7Z4$i&tlW56KVdj&TC!6Jrb>8l0t03z#^BNfY)o-"
-    "27PeqmSc+#t7QzYkyu5ZmMWnf+RUa;#l*oN5ZD}u$%tD{1t!Y8+Y0Ch%-"
-    "5qG=_JNz<Y*m$A<Lxt0wU@TrN8dUk?M*j>pCGvhf*TOy9m&KqPkv}OvTaC<W+iI+EYqDh8U<?Gp+r35WbodwMJtOrYVRM=9)nd&_"
-    "*di>yF#le6L2#I(SOYLE)Qal!4#G9RYOX(DFqy@Z<*Om=IKOIAR#4a%1oW!6LJf3X>Rv;AM&x-"
-    "yXnSrvvU{56xoO{JG%C4F`{?u+(Xqj*o#9#Lt<1bm~s-"
-    "vHe6&{{l4~kix||98Md9={1=fqTs~7WWtv9h9h+wePzFz(Rjg1ayH<F60<asbi&}WNy=?wIn%J)##K=GVi|-"
-    "U_iF!YhCzMD*9E?}M{Uxd|4%(b|Ag+iwBT<1IPj|V9d+&bc71l#71N-D0EB-t=)~A{((I|*Q*G~C`HXESKx%T_6YZPaOFW<};H`-"
-    "lH34qtr?{5FGfa9IUiYbI&8TA}cm_-"
-    "^H&q*GVWs}&)|pBU0*wb+{x?wLQqz^NR<B>JA;mN~#D#P%>QyW|rYS&HOo2KL6Z*Pxa#89fV^|&LqO$nmoh5p_otV&d5(kQgQGBG"
-    "`-Qc2FFym7zy#+1xp;F5Y0S3fq2Z9TxZn-0olsq2@W-"
-    "BTmvdO&2vwT(d@D43?5HL7#ismN@lxEhL)1(04ixvEX${a{^N3aX6H{%#Z1=<WO<t_$04La!~tTwdh`a<)rc^2cS$rzm#MnbBUf4"
-    "k13Z*6S9R#>*mqPr+bu{Py{jczRk3e-"
-    "XHO7Rcxqmr@`tH+G|;96bMDlVy~i9uj5xCOSWw3fL$evJsWdde;s#XK^6JN34uB_ZE{TZvT;qO|$5po3$eZx`S<`UMm54cgb_li@"
-    "qil5UzKW(=p-"
-    "smK6Xx^D7`8d&KfQO^KGaUieZ8;c<vE!jq8ySB0dp<Q!h|J2c`o>RSZCpIZin+~x7&mFKmJm)ZUhoTiqvaX?Bb9FDHRfjrz-"
-    ">SJ<w9u{xOF{daI#&n{Zc(c2v=^1NG2Kvhk&D+5D0>ll%VxW%3$WJ~irCI)3+sT<oP!4DRb8LB28?_2$qSfPj)v6zGV)N407#t|-"
-    "%G*un!o@~h1-<ducKZU4Gr}$mO)-?x8*|_(~!-?3q4-tU(ov@I!=Ymt7rzI?Gk3-"
-    "dHFRxrsEfJ#bn{hlOEOUHmS_=0c#^s4$q5qYO&Ybq0+{q7fb4C$dZl;$VWwZRYxa`lRK4Kyn}94#I^}q5=8xU$JkY=qV^+TYbSVm"
-    "p+;yl)GZ+n&Ky|0L;_=<@cVof(g;bu;^pq2iwqII4z<Hah>mXC*d-"
-    "9H=fK+QvtZ9ctC2nfo@J*6>tHoP4HZFr{5OlA(rW{d3J(6LP1r!)Q@`}8tvLiWMQN;q)8-"
-    "u?HHqa~GNOvyBbIeLy#~u5lv*=jcVQJ*?T6s)HyHvevcR;`dSFVqf@B>lv0Hlt0Pyu2^EE%Z-"
-    "!{$dsy_iu_mr`*SwoqqnrfokMuQlBu2&;z?L2ZKnrmq5^EusFn;vzMB#TM$HH%$4Jcd=rFh)1xpNpc19tKHC|H|%dQ#`!AW7iiC;"
-    "_6UvIDCqg0QAGa)L)<hjOV=2v!O0RcIdIb)QWgEl-"
-    "5#Fp?EFHJzk0CUfmzCK6KL8uezYDm4+ux3yFUKlJYVE@dl}v(+&F2dOOIdk{;6tsh|f`uu1(+OUbe4S_00oYxBqx5_pO_)@a48^y"
-    "224aVy=}9KzdcMbC%QNnm-ej2vqgs^1xpK6gCR3&?134m}}wmFAVHc5BDkGs*-$&oJ9grD2++(Smveda|WP`ZH(+AYmx#{(Q5-"
-    "NJ|@HKwrXA9??DaZfI^R>te5Wr4zYE2&J{?^;vrR4cG<xiYmg#CNN&ON6`mpVjkG?)M&_48mtN6{S1U+28~(gE-lz&aLyt2t-"
-    "oQU-%KBUq<3oyiCV7-"
-    "g<ZIr#mi`sUCNu24P6R_`dYBRv72E7(zH#;7)&cOl$O8CldOaB3>B&X>}^g@AwjTP210E4PS|O^b0&7pqUjVgAs&az@th6?8EPsm"
-    "3>AfD=`!2C$(ME=;v_2K2Io1#E7nt@C)Ti!?m)`{RK&Ovp>bDB=bT=H>H&?{T-"
-    "e~*4JG~o@O+&<0_|b=|M)1h8|lIzG4UxPl!&k77hu!NBF7t$ZLDu;y=QxzZ?V+XO%?UHm1ye2`xZ+=4OB$2VS8j~4<9=8WoS3oQR"
-    "3Bj%ObCGwD#zyetVw*y&$})V6IV`)=~>AiJu$3X5hO!`X;!-8MPf<eeeJDZ*+myZRooleP7#nt5FF>Qj6J8HY}l4TbR}2=6kyso-"
-    "Qf133TadSg^`QfhD{4$21gdCx>1Lw84@Kcpo22+1t?B#V2X(wcf>=BcFtBNgDkf>bR;P5T=?iQfcP*-;7Yn?;^DiujvL9F>5-"
-    "_LRpcGsVij{YI!X8f!75zHG206EeI7CV<Jpr9|)^Q=+*)WPb^uX+hJGy@Q+zRcWO1Kbj(*JFQt=?jb34A6ww)FdA3&@IH5p8F{^w"
-    "21c+wtPcgD8(*Td=kvsCWohm&T6{Cr$((rezL7hlTkJWgN+%>3Y<Kx^HbJj2#xYc=QlS4H*nyVn2Hsw55Hh?Q5x8y`U)>cHbaamt"
-    "@>4N=8*>9-"
-    "lExoJyk+blixk_&{{IwMKOPy@%w@2;S>ECWZZQg38fh}^}Og^!wBE;INWWnX+ddW*uJa3zd4|t)3S=l7O)U^UV19T&6ebbc(S5JJ"
-    "BpwvQX57eqBn-)q*12)imCb2zbj-Y=A)@B#RG=}9Aqbmj?bY6^Mm|-"
-    "EZs8kIy`Ur<JzLs@9KYQxwb<_4Z#;jF6#u9Qp1vxB#MACklXT(xh>T<c?NKcx*n&x9A??h)ci6;#@OXj(G?ov}erZYWbdjONXpg)"
-    "2^;!FDTCu74e(JFk59Gu-m1l#9os4Ylq3}utnEqq%`mQ%J&Zfq=H?{-"
-    ">CgSwWla$xNo?a)0g_<Ou=#3_Jlsnl$wnhTi?)8s<RYm^i(<D*#G?U3*;*a@t4o`z4#62M)HyGZQO&B6})!+4!7hN4rxo`O9mF<l"
-    "aCxz|`q-"
-    "q!SS^LtH!!N?z|!!?usvr^{19VfHYQLV%lL~&J9G`dfem+bzZ52UE=LjBDtxlS+C)HDzgkmIDN@QAqZXK{`R#B=l>zz0&X)4g4u_"
-    "EMV|2O0vw7wu`+jyClax}J!azXYM?;H|R}u2yX`?p89Lw^I`35<I-"
-    "P<_Y#w3(UK&b%^5i8{ceM6586s;lYPHt37h4R|8mZCH6oR7_WzKwDfez^3yEL8-!l%??B_cH4+;p%RR_=RdWfdowD_sCDY?IXwe-"
-    "arRtO=R6wj*!7~0f*ycE(IN%kxvka}wmYDEf6cM>)P(!6RkFlLCOX5Cj5>O;^^IT}A2W%7QQ<6=HWT2)A>~l!8DwpR7#1Z~g#?Jh"
-    "&vMNdOGDNB+f~3OpGWBF#=ZsWvQObU0aDm64@mLXv5d+K=Y3L0BOwHpwVig$f_O-FAET{OCZ_wP6f=C6(?p{PR-"
-    "~agUDBNv;A(O)QKmNynW~MD-f2PTX)f-i;yo+$+Kx)vaT-"
-    "W#@wt<YvGy<!5veRIp8cOw6H;bftNvnW82aa3TBe%|rvScL=sFwWkLS()lK`%Hl>PuJ)ZxsOT?r;{@V8Xmi6%+N!6AKesmdEd|a9"
-    "s@HMxBAwQFrI`F6r^}DDYhi&9cHqaMHqM-n1@t-"
-    "SIL$k~A^vE|l?SFa<i8Ny+mdwPUZ%rpNC<k(WAeGrLEQ`$ZOxn??My;^`qKDzw-lDaBnYzUeVBYBxKPJ!v<$ofg`~ldKZ%b$xz}<"
-    "&}CGA;g7f?5}n>iv@Zoe4(kY_}zT;kFrVRx@dscsT*5Ejiu`5PR3@XHZBg+(lT*@@}LA|Uh#F%<&M&)pMDy4yZ&PqVmr5XASG|~v"
-    "l}q%<sE!|PE8MZ3lIn<lUv+!P!x8(pJonZ_Xi%t`F#cuYUi3@6I1EahXc9?j^PqjNHlzY#NL$iWLjC;jJ?Ah4*2^eGf9RJYnH}gn"
-    ";f&L&ujPz;y%~Ky!QN_ZC05Y1k-42di2(A|EUtzP(u1VP;Syc@%OIrHY-"
-    "*nocDkEGX?SfFaKH#gM$Pd5qtjh8glRay%%hKk>{WTlqyz-xpORke@4l7e87VNOr0I5z{%UD$g%b40#Qg1{u31rVyXvv91=yHH7`"
-    "l&;%K_&jINO;vbtRt_l;?ms%!KYGHFKnkxlTxlWh#?8oStpv|Xdyd}W$dmFK!P%_2kdU1_G$cbw4K_^!H^m(Xo=4P85zXzeX*?3%"
-    "Ilm$B(NUH&5x>o+^!wOUl#DYk9&^hW-"
-    "4U7*$Mu>W2AbL!k~|9;)@wc7S}qoC@eDanr!OxY{oiY86Q`US7r{eV5z&|VFqtFDvQkx(a{0>+5}7pq=i*3WSvq@7#obW2G$9jH{"
-    "$YJUUg#wc0p`6o0S&YLpV`foZHw!S}<=0<DjgGJ@0n`%F}u4h@kwg+RW8kWq&#aj>C?y}M^j2}62T|6Mlp%iTfQCl43S^9v#MwyD"
-    "#HN6l^n9+PmvO#c>J;*XJXsus}>c97t8f5+hOL*4<bh@7d;p=<15Pa#Z!cw<wee$}Yo4~?cr%&LXp*p*2PV<x-"
-    "Oz4!|w#3Q4A<3P@XghmminY1Z37ujFo26RIEs)sxAfKtpPpX&ZHcpao|JtiT^<rRGPUYiWs{E7svRiqwO=Y?*?1Aq(Z0Et3R`Fc>"
-    "AjWG6%p;{6IVCOuW&Y~Maq)I3@t@Ko|ET`<diTt0Iob8q8=1{@`fqDR_mP!beK*Xe%FUHv*6Uc?N<_;GinM|haYGR=Oc}JDuX(x6"
-    "HnZOBx}W+g9Q(2y^O~I2Hvub!C+qY6ta7Fo{Gk2NhKW;8{@jLkT=ZRclS@5)C@ZXR{RV@4*?94Jo~^(3e9QZ@yf-"
-    "j;?osgF0Hin9sUdBbIh~Gn%td15yhORViofmcY1`lJ?77)l^0^o69S(n1_>9yWq<;<w?biss>oVS*?TVk5JKJTyReiQQuNLX~&i?"
-    "__Y)+y"
+    "c-q~4+j8T`mEgO+0tJu9q?@EjsZ>?E_Ndirx7Kxwl5B5pMU4U?k|JCnKm(vuv_}zsnuvLshk0?t#?HjV#KwNaeolSKo|8A^6$Gi8"
+    "cJFv5T16l)Cr_UHIhi<m66fP;IVZuinx!XONBAd5qwMxLBw2_LNEDxJ1;NpbR8cUVMny@g<8V<;`Y*!zMHbD-ad?-I`*~heVKC0K"
+    "ie%96K8dU8aZK)#G3nDEy&%bwDv8p5IgV0tJW__4R@J;u{;){yj>9uHME{bE7e!Jn`)~6!881U<%>F0mh{+^cq*cEx#=$SLJR`q2"
+    "49aSm682<~mC=OslPpcxt8tOcEBCu(c1vHxQ578=1~*Yj`Y^j3c9Ivfel)I<Jmb$8^i@)&<m62;j)K#R;Pe*YI@)Fr@im3!ghGB$"
+    "<arhRX-ljj%?m)pl+4Hh%vyXr<Zt@@o7;onE-E_xeh%Zp&tCAe(eu&%DDKvcCVHa@Hk#~Ao=%=Cjb@9A#9BN01e)%TqupqtG`-1-"
+    "m=yZN^bs`PeYzVx-BlV#<1s8$Ys?-&<7eX+<H^KoYyvEwBHZ+UN|$m`OrkL$=4U%QJI{7v>rKCik`kBpvz`4Nviq!V5CaY4I$+S}"
+    "H_va>o-kus!kcH$<K6v{@@5*v`TapK3`RTiPr>dG{!`rEM4e$T;Qv3^dBMSZ*rI=aDR=TF|I{y&KPDNhk6{cD_epE~ewxHF$v((F"
+    "aZ=9HXn7DIB?V8C88T0lRa!4($=(*5B3{bAl$Q>I(Qx>4v4kl}Zl{(0Y!(%_Nd}7&5Ar)wOj2AYgGM~RiN+sqi+qtuLb<t>TS3WG"
+    "JfGa^IMBeF<hYyBEJ>F-Vdh8`{b)W%wp^AKne~Eifa^ZKipH1p_jj~Ocu8(^68z>O>;+|%mHm<wNlg@Ve84jh#b|f_NjygO?aTEK"
+    "p6=-oE~+Ze7!s3gzNpwgEApv|3KD6+A3%#KOj$Wb(Aie3Pm*xgk4x63Zos*01SD31Sc{vQ0g=ba0x0%*z212g$CT9I86{V_Q;VWR"
+    "(B^pp(y<Vas{&A&px8PHCP@l!px1C#1_UHrFUaT77(}f0jCMhJr#yAw<Y0;vb&%y%=K$zAx=BggtuadH0*)wfYcgQG&S)?+n1~OA"
+    "V)c&rMv~whuz#jeMSkc20-a-t{`HP=yuj%FC<Xc_Qkw9^1CI=zzHkgSC<&+<kj+c?{(Cl_LOBQe68tRpQ|ry1xfU@<VA{Sxd7SN0"
+    "IGJp(K9lq@bh0oN|C>SWXrS`sv$-zwD7(E!6XQ5UehWYJtmpHnEbn0w@y_B)hpcO}1C|)`v7NRDO>CDhDwH%#V7qur#g)cQR6S4y"
+    "<721wFePy#cmJtl_hC1Jeb<g0O!D!f)X~kJDGJRdR!cs8QnV)i-;U6kqv4BQFnS6~b7yZ4HRs4+dTWzsNhT%uvuE{UX3?iwvhTTQ"
+    "d>>_?@}eM&7(p&o3D}t0yaP}{wgSE_5-AVx-+j<Wa}+WCBEJV3h!$1O{sUkFL}(L?CPi0yf&V#NQ#mV39_mn{-3>z80(6oRxy~p}"
+    "ZnJ&@paO)rF}1wEjphd$P9(BMBST|IV+G{QY&CEA`AdMF=C^q>hT#d=Zcf03e0%DUZ^|=71EV<=?VItpil#LbI|_oR=-=Wn(5y3h"
+    "x)&2LV>M0ztM)~-H=aCm@(gRresvqADSv#=QSp3ekPCG+`ZsAl{-`k&N9Rz-+ekMsM@$Y(ci7*WJq+Vfw%4sa4(n47tk3r3>?x^W"
+    "tNSG?T&kP~!x5S3D*>i06Gh=M82Txhz*tW`JEiM06{?{Js=c8fDjlG5aYL~yA@W(!Eg>4!5TOk0*Ta!CP3C1%N?w=(i%__z#<?$|"
+    "xdB=gRf@z$Nhu`H(>+CNc>tC&0SswX%WcL+`}_N?cE^?=+?iXoe_sY$1JF6K$CBf|Vb^W>aJ{w*Ds41E<wo_|)2?%tn?<>7au=HC"
+    "Fm&ghdk#_*dEuUfxxY=5(4j{=yZk?}5Nj4vEmo;YR5LGJT4wl#wTw<90>nu|(zu^SHzc(IrP5IMgXR3|3zCsfybYVg+l~-#oO~58"
+    "W-*@=@Qe*B5S@*J!0<r6a!K=C*p~$XqXfJpe;;bz)jipU^b4*+Ul_)q*4627)N@BSuw#H9xu6_2U)f?l$BsQkRRIhono^H5Xe{XG"
+    "MRFI7mwoW+h?@~wX$B*Du&YN82IDDF)aq);@kJkaw5T-bRhxE|YTkq_ovy#W2Aw#BdPk#uSOdb%9>35MW6tuJr0!ky+tV=YVwR!4"
+    "z-e`BdSg1MA#sWXw;jWKVHml{)3SMkT|1`ls%KOk<;Eu4quMJfNlM1`2o#$PiLi4m91eF_K&8gNhA*wJ(=cS*YgD}@HTL&-e)ogK"
+    "^|)JuLl3(HH!nPfg|iFS<8BRJgOy~7C7i{6g0-jWVW)(sML|^c!AWy^-d3ErzdX=<tXjn@qQ4vit*8APGL7yMTthj_^J=Qkdr#7F"
+    "J|h-ajsS3#9P1f&A8V6(UAuKnQmVYESkeWOxwaCRKD+%gwur)s&ZxH}44|y&mb9?co~lt54F;P^_^5+Lse~bZzbLC@vJ|43WU;eT"
+    "pC<D*)yHD6o5jsdN?hK}{?5-WVtHW%fgVpVUaH_(r>@iUm=~m9`yL7(;X`1hY<WK=1!+LGx$rNOY-pp;ITS2C(+r2{U?@Pi-3uA?"
+    "Z|9Bd8n9K<B>R}SSZgB#(uk4Lgx~(=K7j?LQ(9}Gj9R9O&T(Ejj1ZQZ?yIY$OR>ZN?Vgx1^F2F`wr6=|g8KJr>tQ8TMOiY7m}4+s"
+    "q$L48x`Wov1he~uhPV5$*nCmBz&yyRX@5LT(zvrz=Xm6peb9~(&B%=Q$`$>08~g9--T&?*Sx$-wD4jzsx(<Kd3!dYD(1ZeAtR#hY"
+    "_6|MSr=e8nL9n~0bsPEm^mj02#k<vh48ht7P1Z^KWPfOfa!jqvH<G$!U&y!SF!jGgB-+JyF9hE`v%NZP=IM^ld{%jJXI1!7jvnFu"
+    "qoWQU+AXOz4xg=WcRn_PRf7%=Z!#vf9XMo>m*<u!``Kg?@4Sc}=LpyHr%740FgTt$T@Mx<vh=+i-Covn-MrmQx4&po?N$~;A(MRm"
+    "IO=b7{O$QbM759M`^i(Q#8@Q#S)S#TwtB(kcdy__{~ftqq*2ieUXd)#d%;<r0XCzu7s$5%$pP$o(RWe0AguzXKgPOz35-_8T)imp"
+    "1xs81Qz88b|J9yn45}b$Jy9D`AZ_p{Ry+%L)~)u}fF1Y#>S+YiI#<@WZ&2>)Xe>B&^SpGazZMZLN2=H<GNc>TCZO($s&A(DEs-Y|"
+    "+nAf*bHtFd*jK0W!jZ>)(Nw3RlA{?d`nws4lPKt@=F#2|FjJd=M%IF3RH4c`CQf~Ft-OOz;|y&Y)p~Xp(}pvwI5i9>jK3f_+UBL9"
+    "N87B@_6V!#Xw7Jx+y!HhTIF#V&F3Mj9zEhV5r4sc@ppP3%)*C3R3uTK>4oF4Di$O>IlVaAhIXz#N)}m;iF1zh%GTfrWM~#7@o_j$"
+    "7a(bV%W}4%80Sv>rUM>_Z)vMQJU+R*zJB}iH@~`gef`_>cb6A$USD4WB4ErDK*LCxS%FQYVZ)PO5p=GC&wu`p0KvLU!4fLa?}n`p"
+    "pe>jt5tiSoi?mjZz_ak1gj)P8a)g=xIsxU8kufGPKL7du=;Lsb$Dzh4iHfsnRLRklTngZUR`2j%a(P@5F&v%Y2v}fU@m-@KZ0-5U"
+    "=YRaaN84-^P7d3Q0!|ne9+iZZCW{pzFX+R;9s*#K<aSX|Pf4R41@kO`&c{(=>LHduBSj{^CQI0hJiko|QpRPqh?6`xeR~mr0durX"
+    "TYI*$&N(S$25nfZ9P!D=4~()WDnn6BrJ(nY!+bIcgK`dL2TgAPpb_|VCW09!rX;(qrpMva;r_FbRiI4s6mSRR8I|C%F7rhpzz<NX"
+    ">#!-CUFEm1XbRuDo2_j4<rJh#UZB-Rf@(^{+^#O_4to2YeE!Qn>EvOPKKrrd+LJm-7y9UcV%fK41(}iA4Jnj;qwR0<PkI;1=$FwQ"
+    "p_m4_aDz2gz`|vf7Z}LwfOi8*aa=6tpz#l3_m;s83Cbzxq`1o^g|a}C)Re6PVg(mZ-Kx5nQwh-+o5n5alXqkW7M}yB$_yne<dP##"
+    "PU0V$F5Dc^zb#S^h3$Eh_6bj3;h#o6)H7ASePzQ1N?~F^jrHU3mI~tj?%+j#0wYdCmCr`Qp@WjqZ{$P1gnzoY*TLiVI2!+6;Q^K?"
+    "prg{0D99cYQjMpSKX6Wcad^6eda!bR6d2Gx;*F2>>8KR5<ysWw7XvTzD5hXiILaWpi;@&;mxC(TWKwwY9bFQeeFdXaT|o1Oa*3Dp"
+    "x2_H7h$QB7OS%UZqm2!+sfW@Pr<%+%)n}9VnTr9`G`_M^KPap3fr1B`sKALsT?mk(w1CG^7Gvfc>yd>GKo16e0$ZQ}p@Gi<lUz|T"
+    "+hHK#nF~G2HK$Odvnb(;9VUC3--fjaWXUsu$K($66PVo<G4!?qWoVfmJYOV-6~EQ}qp2j2L6}d36--Gw2eZ1GGO8%4*)u=`lD3l_"
+    "Ps@)%bdxU-9SJP{4-25^3NQt%hG%|e;G+PXX%D%iAb(g8U<5n`CDAv<*nWv~a+`Kwn^8yGh$4Y5u`Ch)mg}k?aMIdRlz?c2Azi1b"
+    "dXxbDB<3GY{@13cnCc2elrRz#SO$Mi%{Q&9YQII<n56F*HrC?olQY`Yw99Hjmqr=2ml;CCn)3N?m2}?9K$v`OU{4X^dazV8+jmZ^"
+    "k-%WwQE5!t@uJ}sjfvLq8Nt%<#8STs7V&h?QqEbLT2&m%I61|39wlfniUi;_jd(f$%lHc^yBddKTE`kB74pBPZ$lzX^1P}YFX1ZJ"
+    "oGpE3w#_K3G=2DD=u(K99y|XOq1HPH7A3*FLok~K;BW#asg&Cd?xPem1SomXc8u)_vT(UbE1+(Bbd{)H@hma+KE1%T3W#0&fG)kl"
+    "2GYMbw^Z1&w7F)b;**ol|MtI4#$b4)9<F4PBX%T{HR((i8Dp4E?be5g5?FEq8thOgkUMaUZi)mWRL3A0vpByW;9;{v<^AQ=n|G(b"
+    "I===ra{cS`AE04~O$JeN9icBf08ir@wX3Vst2f`CzqGqBi^$vI($k~Vy1Y95?{)K0T||iQzB|7<`<}nOzPfmI{^mDV*RQbQ?%q&u"
+    "`tA95r@wi5RfB37W#*(D6W1@#U;pard+355k=6+O@^|Ooo}OKue)IDD`ttnj-T77B{DsyQr@elAdUbXF?lrvJ{`>c*{r?g5|2XXL"
+    "f2jXCxbA=W)3CR{|L`~4YWLH#U+e2Lmv{F4=@kHT`S#80%X7Wy{?KT9`u6S1A3TkBhh}RqaAvSICA_R7Hq2@{2;zLaz_$YsdFQO*"
+    "H_MB-Bg~p^Pj=x!jfOsYj6~@wg9Z(q>%fB2k$J}ry}0|Vbdf%5L$BJeRXQqeT|-yZ`BOSe_p706?V>3iRj;aPJ5=XO=}!5rp&#R5"
+    "vjggeRh_8*Fgr5SdR13$fLonc(VS{>tGKOQktXaa4vR{9%&cu9JZ|_Zow$+O&`FrFD&cYStBLM}k?81#)?ACO)aX;!r`mH(tJLg1"
+    "WdLq3HL*3f&D2i171h+)u(w=;FpH<nAlx=`4YGo!b-PFtF`6mYC~I`1PeUS_L5(=1c9P2Y1QQf~hDWoaE5hiSC4i!tXwn>OHxB|D"
+    "RWKGt>Ct#GW`SP3O~8JGw$ksSBBLF%MVgwz_>2ct9o<=jOK=1oFAG7U`k;KuccdzoSIG?1XnF(Q?<`+r^nmrSel?BCm-#qKxy4sn"
+    "bIz4*eg8q>IZm}WlZ9ewm0^MFC5zN`z;Nm+2(OeQ(hSIIQDnk2OA#pE6F2svA~QNdotk+7#>E&%hnB>4U4tQTN(VCyBf-2cz$I7U"
+    "?6Ig-6Syuo%NkBG!l4Zmx~prgg6>G0WfU|7*%IHb1+W1exc(7<2jsn~l~)HTx)*@Bj@4m>AvRF-+yI;M3t)hyfpMa7bxG3(Y#3!7"
+    "&i>SMd5xh!Fp2f})K@_VK?uGM!T^8K9|u7gb`QM^$?{?rrO6)&)1)1A7u7XT`9nyC;^*N|d(7N3c=7&2{UVtJohPS75iJKvN&m7T"
+    "o#<vG*!X7A)B)H}=h1koxJ?)W)knhl&~eKrEIxXC3}``j3L`Ur`?tCo56CYoJ_x*ff(v_(KR@742F-xEwZW0%$LLcAfzt2TAToYR"
+    "8wZ*%$|;*neO<5dL3!>(h=c5w+4xm$adpg{65+yQgLVd#zXyPpS*NS-;sg`t&_Q&4f(WFjW4j27tjZC?gA(kY0q|eiF$j~wGRWr$"
+    "V%e*q?XXAAt!J+oTy)d;{D)5TI49(N`3k<4D?o}rY!EwHObSlz%zO3oEZPnrXJ{<r3~Mr>cV`t`4eb%(N?-(lm-YZi0MPQ>B<O?;"
+    "KcUiB=_i+7FI0c83z_h2n&%}Z5+-U?90MyWmI5XPpo^}gql~XW#W2{4RjDXh+=AYwE!J6kpmdar#~IWnj;&MSuSd`Zrff6KvF30+"
+    "h*&2tH2k%`6U`tykj_Twy18O|JGhz>kq<e+kZ?K8@3SB((W6O&8#0a-bmL`W=p@LqbScnT1~7Y(U`QN;`m=~<meeT(ThYWr2g7wJ"
+    "2!h{{o8N+yPy){I>KV>gK~e=U5D1CxpqaE-P!n*%DTs?*6a~Y2iI%|gGj^IY>y5<1Z??o^NneA>N;Pk7>=~gngJGqL<UQ+AzOMhx"
+    "WveE9n0C^;gIv`fNOg1U2w~~`Bhkpr?waz{@toA9#4y-#NfJ907j-iRrqREmA;Y+%k(^vcLFz3x%`9jPREo%w__Rd_Gxy?)4Az~<"
+    "O;l}2|2BGHeqxQ;b_GxD@eU2E#2(x<BceFwo(#Bu^khod3&PVZNLUvdD~e_1#yDT3G3B)zBCtWj=kV_+$x27T!65Y69$OB^pp52W"
+    "4QdE=b;?$IxlJvlMb|^jihUw^i*~T+qeXWuW^8VV3XHK6ZaOm8+zx@IVG*0IjM3CI!2jFjo7Y$XTau1<AHX2}hkppd_aDM;OBb^N"
+    "z6al)3Yl!$Z;Jh-w$|BA_m3Q-f`1Zn0_PeaU{wIoEoP{z9A=t;Jv<#CQ>b*@<dtP{huvY>3+B-hRe}mVWlNq{0R(ctfjt<^^Rg1D"
+    "Bx(eUVZ(J?MMe(d;37Cp0fXm&{|z2=9&$h#1aEGBk17(FzLX6dCe}w=r0|K~!z=VncxU=kqvNg%a+6YR#B})hKd!S)GX*@7Nkc|u"
+    "hX;ww&E<~=(fA{6NH-GWDqUAJfsTvq@<nBJHI`_Md+dqU=wJZ(&cP)jo5G^?cLJo(aNIhEl+h3z9pfU_>?Eex^dMaD)p30)L+;<V"
+    "*f7iQJKaH*Us9L5v-_-zjNQlZgKH$MWrLrKUdkdRXG*ZJV{SGZ--;)C@XUaA?U-*InRx|aCU(Y^!EGKx-w`f@WOEjmMPa0kzyq>&"
+    "+##bGsVH9RiaqdP%%i({G#lA~e?00~PC0=Ha=eI5ds@`k9P4{+M1w>tSfn6Zux)UcoCB|xunqFy&`rnIJ}l<o5K&}dfndju#HiBD"
+    "#!tn_!9Wn`oM}`NH=PPdly$cy&_}G-BORFoj!KS}U+aK?&-ZIW=CpJV&sG4@p=pV(*Z~?6?2VWS4bZrNhf#oMMBsOM4}?D{@)<aT"
+    "r6?2|Y?)-t5>%kv|0Kq`PVkI%O(GAbN%761Ty`i~m~Xh95ppci4T|wnOEey+3ep)yF}*c5l6JWElx{1-7vRIJM)^7j(G6EB_NSmR"
+    "gE(QvI`jY`nG!TQ5OKVIORO_EqxaX~n|YLhCC%*<#49RfY7Py|Il;~3<A`aPCWyf|07HRjTO^S&2;Qc6eAzQ_*XfeEsD`GR46=b;"
+    "IOQ2A#~x7{u5)P}-v-hle#+ZNm+ss>R%6KVU!VX6RJe8yr_<(O;#MZ`=y0M|F=5hX&6(P7B@GE)^D-WDM>pY9zi8Dqni>16Hrntb"
+    "ST95ouPIhY`-gmi$#IZSNt#mIUaOoQIA?IUmM!6Dr&rb>RK>+_qPH;{mr;PMvz27f&Jj|G)>7g<?uq=TDRcE5r!;(T&)TH({y(+m"
+    "{R_I|)Pm*9$AMQBZ>fUGS0lEiijxKby`{@JZyDK^E}&M+2^h>*$#-CszI8R*%I&qZx3hhQS15+m_@gJ<H@O;ko1GYMMeIOhjCMAw"
+    "i^VQ5_GoxuhaO(ka-Fr<1vXZtj22?h-+XiySp<Q$2U=xBpvEXnv(l0ZesPHy)94!+^jaJou#5*yu(GOll$BWO61vq{Yc*DR)Q4{h"
+    "=dQhFG*L%YP|m42alPH3R+fPx92Jus?CjHG#*B(uUe9Q*g)#<L@ECtV{T`e$O~DPsq~x(fFh?RZ&ZkA5<%_b1m+Y&PfFTj5xacTQ"
+    "nptyBk^%;wE#N<>hhP`(P=m6Q0vw{KKy`<9elgf;5T{>&q0v&)dD)OFhGNoUfBIG!q32fa)G7zEwVm+2vSo`*o`HI_y--tuGU|XP"
+    "1O?3ZQAxKFPYM~CfR*B^l^a|yb43A6>8gFfUx(hdTAj;dDqPHcGRz)&CY)x2*oM<<5oJ6^n&k3{>c{IOQLg|<aUj3baV(~Av}9F+"
+    "?b^zE>2}SH;zdWNdQElNoR)^g20T>73h12E&|G9IkYp8hyXI=vvQ>vVPuHrsT4LR<2TL}!Z^~2MO&vf!|8AP3vN!`7x>#hHa05%^"
+    "0DgRhd1BxaRs+3+M`*QU4~=4WPJ83G>|AKA3$0yLgoRWBf)%}W{+D0_H?yN=A@Z_%7Bp;>Jv1DI{A$OqDHk8pI$0MX^4e-8pR2cQ"
+    "HfnUy;59ZxG-S0QW3E9P=BhsBw_+G~0^d6@J%1Te+t~;xJG^3bT|6I+w3NUEZpXT5<7Ax3g+oK|9?P&uYn$`28`F@Mz{_B-@^9$f"
+    "q8+EI<EIM-qU~HQ#?xPZPj66ZDpj+JLk;C6^4>hBLQ8ZoGaMTJ#79~!;VdAriUJXZAM3)DljFu?Q)Zn8gNKb=&eNo#S<1oh^Catp"
+    "zx?GdLuclZTN|t!ub=B|pI-bidOz&%v%^++&}wJcd)U5(J<~>V#6M~?3J-1f0uy<R$jo|jtBgfrj357~1%}=Zag3LK%o}U^;^a<U"
+    "KJQ>u^zzIxS~m##;g*qDuA=rcU~A{_^cvgHXlPU>!{kgq;MJ|@@rOU;i;#u~<STxI!q*}iO$E4iqYi?j+gt4F)z)iZ?e$f#XQ9=o"
+    "MQyc(eYM&S(csu1wF#TaRRSt_TW!rpP}4Mq2sv!ddaDt0m$VVb*gbSvx6@DMm<6I?Qx|pyr~MSX{W?>us<SoCRHKANwNYEA`dsoB"
+    "l*Ad^#%AGef@;c%ZW|F|IA30oq_y+ViD<5Yt*_^BYh^CRS1tWLi`jH|>_(l#n7#2Jfau;fWGYgJcI69RFK3?vz^7=A(tiw00S0=}"
+    "c+SsCHk9Sb4n5Y_IH2LK=J#Py!FWx{J$^RH&E1dS4;}UOt1d`urQtynBk_L#N_nZ2c!Su>X^~QBy&X8uVJPpk5I1|S1+*QR>n9#R"
+    ")l*ZrLMm<~7uT1J8_CAzxRT8)dVYZ}0#A%eSFqkf^*7t2uN}|y`ej<$NH3?lO!KOAob_p(Weoqm#q1UHGm|u$QIkNA0M<Z%1+8F6"
+    "n2OpzuNUb4Yf}v9OJL;@tuyL|W@(L1_Ig*kkZT;Fw3uFBrMKUJefCumMflhpjMt4*@L@Eu4s3a7G~|{qYXWdz08!jRW7e4-Q{v;C"
+    "1ViN)y7tZZ(Pw(_*0HY16UugB=A0j_#O+ev9IR<lDA@NL1Zc@h_CT7n3E2kI>NKS#^G?96phOjbzRl@PB^79(K#(m@yC2qRdXb`!"
+    "CKHf^c!mN`*)Tc@HIWvEia@hunXTXCOS=qy92Iec^&H`cK~rKJRe?Ub1uZ8~0pmi1x~wg&bNa0;&(L^zt35osch^4w-oc~KKzkSt"
+    "06q%sMmjM_NPL0_DdIc%1GedHk>l5FY^a$7-5zFipgmYouVfKTeQ<xo6A1<=!pCk840EeJ;Lw+$-CPHWS0vYm0l`jvbDsgez`d!K"
+    ">{y^26gY{W8oFk~ca2Q6vNLKs%6*^z@n0x|)@|rJBS&q#)v$ylsrhV38y3;3EzI-7=6m~iG-WBZ33TadP_XK50VTUI+f)=Ry-2Up"
+    "UW4TV-p9A4>}}}m;-fV7TJK`5kuO5mB;F<SySrU$7T0>OwP@bSw`%@6bayf=uFwDT-wh(;4Od`5tjUW4kL|9HQN+fHz7~$X;Vt^D"
+    "#P$&eniwW#X}@`1LPVtM0~0g#lmvGJR{3-_c=riC7a%^#gJT-`S*+HhDL)b(SfoSK)R+8546~40-#z7QxR_0RgV%IVw*S5kG!DM%"
+    "fB4g=x4ZN3H{0wOlhM0t+k5;drYx5&S@I@d6k`&gYg8=2rokJ^@VS73oz}$CF02To*W3+^fh9rkJ|-dGAr%|&8J3@gLP}ftqU2TP"
+    "(%#jJ&yD(Wqhj54?%g#C9`NMQ-Sa0vNM<gb?Uk~%^mM*6AY$WQk5P!(M6jU=8P+KR0km{vjOR%42KH=toH=}FdA|W$oyjqGs76Qg"
+    "0fD9h0?$>ViFz?BuL<4=X*MjY&m_3UexhXX>UB$_yME-X!)mS+Uk`pQY4lb{+v-vddv*G+8&G&3HH(1>J}i7Wu&^S?+A0`Cc5=OB"
+    "6@b3CdM%c(RYOq~FD^5yOvNa5@l($jxpDt}IFa{g9r(yasY`Wcx}P`^rqpO*1HESw+e_vE`d47(n9(0LgtnMn(X65KR#(H85p<1`"
+    "*Fd8Wak%1ZSsVG2$DV%f$ezboHP^bViU#LjmO`7}<ez{?t0cv*^MLrxvA_Zt7OS-jUP*yJ#L81}-LYDVW(o)HE#=iZuFE$}(aS>1"
+    "Jq1;GY5+I-+dLzdgjG5Gel5{%_G-ee6^0g_)o`@5%UD?2O@S`S>LWoW8f`;voEP+)-y}Y#Ux__7%uB6+(lFQTCNf>E292c6NH_kJ"
+    "OE!=7VZdYK-_0)@GlP>I%q<H{*j?;t4zVT|J#4k6GF4(-=0GyEe&-&=+C5&{>m+P_1ugW7ap=P}`I)>6fmKb3Bjg($0&&|RE9s%x"
+    "%xFFiWf&JOT>3$+?Zhu)D{TgZSALBF+dRLPlqC#zEiNLqXE!TSCi!?#b~c!bF8P{K8kG<$cdzk4T3fq>lkns8s(!NKr=(wHaUpg1"
+    "%$q7CU)t9{a3t`)&SahIbk}PPyHiJmAMavu1Q=m+#@0w2Cg6DXH(!ZF?FJ0KL}L`~ibnnFj$S}-_+ZK`nJnc9wyITeqoa}rN;!_O"
+    "!rh0VY-!@ieR#aa&?|LNZwIfrDeNkPCBRVohKEMzH<}9eF<Xp`MBEsYCrgy0uu;msInP|Lq$)`|8MFd~dp6gU%Pnx$wtT(b(qElL"
+    "eKj8Dp&Iopp+L&IyUT<uyQA=t7`46Azd9yYDeM}X1|VYOI4LT;6HJ5(aE%E_PWsWOC8^kLH(j1+Qkxj(l>@Oa+Ea&Y)|1wH>RW#D"
+    "T+Mo0N1t7-+UB^e^fhm%q^9NY@Zy@Mv=6Oe9=g^U>GvOet7U0lhx<k2I_^C3$f0_S!GcRsb)by#e)vI42$w7)%pz!m&})`Cz&L3Q"
+    "#G2`84=`SviCq>5+j`B?*YOIlXibK4_=v^tNzBi!RmmM$9|j}`{GQ=$hUVXfknmm<5SgT}N2SqrR!d@0+*eHmib!r=3k{-UtR37V"
+    "&|Pu^HA!G!Gr)rtl=H=%ZHtWEfyH7KOVHu?8?RAJGG(!@YXsEcgr=l7IO44VKt^m}CP@9E3RChpZ%_z~u)wuZ$0e6|#!DjZNkOCl"
+    "WS?6?FhBqKf2sM3ronKN!q0#H*8xq_S;+oMqYbM!idgxDps@p}L8EY8;T+fsGA5G<wBo^5gNAB2SFpI5CDmIRUh-UX)bdzb>ogq8"
+    "1JStIu{*-$JQ(nVweZ&6(e4f}ZUrRF{cC+hfmXuv%L-dvbWA~KL+YTr(<SHh(yJ)&eFKywA&p>13tx8KLo}-{NZ>O`6|?FFQGaqs"
+    "fP?YpJO}gNish`gJbvk={KDTRt9#<OP;%zDO47e79#mI8pO}>5a!udz7#X!&orv<bTiaF(>Ea3T3-h|Zsenb}dm19dM=97}?HT|U"
+    "fjQueroQ4Il%ao=ngrMNX8cf{QHjuauFgynuUFja+F@GEExwt^j~H>zR!<q(We@uCTp05F4t~C*Y6UC-aPpGzN6geJ!niKYFlC(G"
+    "AMhLJ_gSc3fKIT9ib`;VFK#n&K@*cR^y+2q7UTEOf{Rz@0s9PF!pq&uGxifC{&tX(+i1K*wmQT3*Urwqa@R6a3Y~R8OV-fWqO;JT"
+    "*c0}qoF<csUq;LysWZS+IRc#l4SJkK7y7gbCaU4@w@m#R45Mi^haPlbw>~25-yru@0?b3m?^(@(DXnNYgkpn!=hc6ZnKhIneH|#D"
+    "Xg=`wuHiQ8QRO(F|ME|Ch|hod=lWQy0|guqd;Rpowcho6Z*Tr4&q3ZOXH*=j)gfy9VP)UBN)H6Ebav7d7jLUQM+J#%h(ZqGKWgeg"
+    "rh10lK~dB&^rDpVQqvvUlz*Dg>Nb<y*Ku27wb3@oq{`;Egn+f5Y@)PR=-?)x?Grf7_i<Y__pUp+Ei^P=#BC}V$I<1rFG6p5!}(fw"
+    "oVPQ-R$lSVE>d27)3=`3;a?wLU9<Agim9}V6E>04YuWB?&oBR%wjF(kv;T{k{41sH$F&@|FD4|vgyUv&z$FdP95-Z(daR+%4Wg?q"
+    "lUAWnN1ZZ^69P_Fy}+!F=R`<5x030WkZ!tZLIJD&=N;At$r8^$qT+CVMPQ}<rtiYWAE%&k*qZu)soZ!|^#_;rETY)<#t<ro<z^!D"
+    "*3-8862>>WigVs|C8}B#X$Br*%)WASPjA*?VRD*K6lye|lWY*2W=mPki{Hf2zP922s0LNYvj~L>&y&JLBvbO1IDF|Wrd4Y<eDu1e"
+    "nZR6Xr%m8qp}IPNxma&OEI%vIz9!0@$Y{HIri!(-(*+&Uj}FnWZn*&vTaU7tn(U;SH8(Mmg!$KA460w9am8=G+!uR(R9ki<OSb6*"
+    "N(+79`__{4SZgbPuDuiE)dc2+5o;MGE&^rt>e_zsX5sfA(<1+(_V#M?%&R%sw~^LTo2%sC#)9q(3%B|@!gYn4E10cc4cnF?THcAN"
+    "6~Bl}F?kWppzV6i`xG}>^?El<*0(R(_cNL|Gq(QLiBjaUI>*4ObnxbP^~1_0Og;H|W$iMEhweJx2k?QcY(;(J4J{ZurL_kFR(3<^"
+    "mE(@IweL0W_zyqOuf(pX;OzeBA2ZqHp8hqy2jZ)9UhD4shb?!&nC+QMHa6WrTT3DJEB9;jq>GT`Cq(L6#zq~g-fy{yOmM=$?!Z(a"
+    "uy(}$Dni}7UA62wD)5WeAUq=R@6F?z7_kCCJY(<H|BnunubYTB!S%-D*0onwd@sXu<E2CNYa$J0ijhKgiFa#B?ez27riagL6$vuq"
+    "qp`jb#OHP&l@_u-NZsl)m;UaD`iGd_5mx9YtUtQMUx0mgPjAaiVpd0uZk19aHSj|aC*>S##ORVc8MzPGzr>=u&3oYb$gX_Z_<6-V"
+    "Tm5mx4X;i2UcBwOsnB=vv)){1GO2pZ<#e=L6eLv6Pqj54h;Dmn{^nnh^L#%}?sG5L*&F_(;2EjksrxAav|9u8&}Dmfv|WyiWL}+Y"
+    "9c|y_@e=<|t66%o_5T3zDFBc"
 )
 
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
-GOOGLE_API_KEY_PATTERN = re.compile(r"AIza[0-9A-Za-z_-]{20,}")
+# Besides the active key (matched literally), redact anything that has the shape of a credential.
+SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"AIza[0-9A-Za-z_-]{20,}"), "***"),  # Google API keys
+    (re.compile(r"\bAQ\.[0-9A-Za-z_.-]{20,}"), "***"),  # newer Google-style keys
+    (re.compile(r"\bya29\.[0-9A-Za-z_.-]{20,}"), "***"),  # Google OAuth access tokens
+    (re.compile(r"\bsk-[0-9A-Za-z_-]{20,}"), "***"),  # generic secret keys
+    (re.compile(r"(?i)\bBearer\s+[0-9A-Za-z._~+/=-]{16,}"), "Bearer ***"),
+    # Header dumps and URL query strings: "x-goog-api-key: <v>", "?key=<v>", "&key=<v>".
+    (re.compile(r"(?i)(\bx-goog-api-key\s*[:=]\s*|[?&]key=)[^\s&\"',;]{8,}"), r"\1***"),
+)
 DECIMAL_NUMBER_PATTERN = re.compile(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 DECIMAL_INTEGER_PATTERN = re.compile(r"^[+-]?[0-9]+(?:\.0+)?$")
 
 MAX_INT_VALUE = 2_147_483_647
-MAX_FLOAT_VALUE = 3.4028234663852886e38  # ConfigOptionDef's default FLT_MAX limit.
+
+
+def _read_panel_source() -> str:
+    if PANEL_FILE is not None:
+        try:
+            return PANEL_FILE.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            pass  # Fall through to the embedded copy.
+    if not EMBEDDED_PANEL_HTML:
+        raise RuntimeError("The Orca AI Agent panel resource is unavailable.")
+    try:
+        compressed = base64.b85decode(EMBEDDED_PANEL_HTML.encode("ascii"))
+        return zlib.decompress(compressed).decode("utf-8")
+    except (ValueError, zlib.error, UnicodeError) as error:
+        raise RuntimeError("The embedded Orca AI Agent panel resource is invalid.") from error
 
 
 def _load_panel_html() -> str:
-    """Load the panel source, falling back to the self-contained installed-plugin copy."""
-    try:
-        return PANEL_FILE.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        if not EMBEDDED_PANEL_HTML:
-            raise RuntimeError("The Orca AI Agent panel resource is unavailable.") from None
+    """Load the panel source (checkout file, else the embedded copy) and stamp the version."""
+    return _read_panel_source().replace(VERSION_PLACEHOLDER, PLUGIN_VERSION)
+
+
+_SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+    "/usr/local/etc/openssl/cert.pem",
+    "/opt/homebrew/etc/ca-certificates/cert.pem",
+)
+
+
+def _ssl_context_candidates():
+    """Yield TLS contexts to try, best first, creating each one lazily.
+
+    OrcaSlicer's embedded OpenSSL may look for CA certificates at a build path that does not exist
+    on user machines. On Windows the stdlib loads the Windows certificate store itself (no package
+    or file access, which the plugin audit hook may deny), so that comes first. Elsewhere prefer
+    the OS trust store (truststore), then certifi, then a CA bundle file. Every step is best effort.
+    """
+    import ssl
+
+    if sys.platform == "win32":
         try:
-            compressed = base64.b85decode(EMBEDDED_PANEL_HTML.encode("ascii"))
-            return zlib.decompress(compressed).decode("utf-8")
-        except (ValueError, zlib.error, UnicodeError) as error:
-            raise RuntimeError("The embedded Orca AI Agent panel resource is invalid.") from error
+            yield ssl.create_default_context()
+        except Exception:
+            pass
+    try:
+        import truststore
+
+        context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        context = None
+    if context is not None:
+        yield context
+    try:
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        context = None
+    if context is not None:
+        yield context
+    for path in _SYSTEM_CA_BUNDLES:
+        try:
+            context = ssl.create_default_context(cafile=path) if Path(path).is_file() else None
+        except Exception:
+            context = None
+        if context is not None:
+            yield context
+    if sys.platform != "win32":
+        yield ssl.create_default_context()
+
+
+def _ssl_context() -> Any:
+    return next(_ssl_context_candidates())
+
+
+class GeminiHTTPError(Exception):
+    def __init__(self, code: int, detail: str = "") -> None:
+        super().__init__(detail or f"HTTP {code}")
+        self.code = code
+        self.message = detail
+
+
+def _error_detail(body: bytes) -> str:
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+        if isinstance(data, list) and data:
+            data = data[0]
+        return str(data["error"]["message"])[:300]
+    except Exception:
+        return ""
+
+
+class TransientNetworkError(RuntimeError):
+    """A network failure that is worth retrying (connection reset, socket timeout)."""
+
+
+def _is_certificate_error(text: str) -> bool:
+    return "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text.lower()
+
+
+def _is_transient_network_reason(reason: Any) -> bool:
+    return isinstance(reason, (TimeoutError, ConnectionError)) or "timed out" in str(reason).lower()
+
+
+def _gemini_request(
+    url: str, api_key: str, payload: dict[str, Any] | None, timeout: float
+) -> dict[str, Any]:
+    """Blocking request to a fixed Gemini endpoint (stdlib urllib, no event loop).
+
+    POST with a JSON body when payload is given, otherwise GET. Always call it from a worker
+    thread. Certificate-verification failures are retried with the next TLS context candidate.
+    """
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    certificate_problem = ""
+    for context in _ssl_context_candidates():
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(
+            url, data=body, headers=headers, method="POST" if body is not None else "GET"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            try:
+                error_body = error.read()
+            except Exception:
+                error_body = b""
+            raise GeminiHTTPError(error.code, _error_detail(error_body)) from None
+        except urllib.error.URLError as error:
+            reason = getattr(error, "reason", error)
+            if _is_certificate_error(str(reason)):
+                certificate_problem = str(reason)
+                continue
+            message = f"Could not reach Gemini: {reason}"
+            if _is_transient_network_reason(reason):
+                raise TransientNetworkError(message) from None
+            raise RuntimeError(message) from None
+        except (OSError, TimeoutError) as error:
+            if _is_certificate_error(str(error)):
+                certificate_problem = str(error)
+                continue
+            message = f"Could not reach Gemini: {error}"
+            if _is_transient_network_reason(error):
+                raise TransientNetworkError(message) from None
+            raise RuntimeError(message) from None
+        except ValueError:
+            raise RuntimeError("Gemini returned an unreadable response.") from None
+        if not isinstance(data, dict):
+            raise RuntimeError("Gemini returned an unexpected response.")
+        return data
+    raise RuntimeError(
+        f"Could not reach Gemini: {certificate_problem or 'no usable TLS context'}. "
+        "OrcaSlicer's bundled Python could not find CA certificates."
+    )
+
+
+def _post_chat_completion(api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    return _gemini_request(GEMINI_CHAT_URL, api_key, payload, timeout)
+
+
+def _get_models(api_key: str, timeout: float) -> dict[str, Any]:
+    return _gemini_request(GEMINI_MODELS_URL, api_key, None, timeout)
+
+
+def _build_payload(model: str, messages: list[dict[str, str]], full: bool) -> dict[str, Any]:
+    """full=True uses structured output, an output cap and bounded reasoning. [verifikasi] that the
+    compat endpoint accepts them for your model; a 400 falls back to full=False automatically."""
+    payload: dict[str, Any] = {"model": model, "messages": messages}
+    if full:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "orca_ai_agent_response", "schema": RESPONSE_SCHEMA},
+        }
+        payload["max_tokens"] = GEMINI_MAX_OUTPUT_TOKENS
+        if model.lower().startswith("gemini-"):
+            payload["reasoning_effort"] = "low"
+    else:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+class RequestCancelled(Exception):
+    """The user cancelled the request (or the panel closed) while it was in flight."""
+
+
+def _call_with_deadline(func: Any, cancel: threading.Event, timeout: float) -> Any:
+    """Run a blocking call in a daemon thread; wait for it, a cancel, or the deadline.
+
+    A blocking socket call cannot be interrupted, so on cancel/timeout the HTTP thread is simply
+    abandoned: its result is discarded, and the socket ends by its own timeout.
+    """
+    results: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def run() -> None:
+        try:
+            results.put(("ok", func()))
+        except BaseException as error:  # noqa: BLE001 - handed to the waiting worker
+            results.put(("err", error))
+
+    threading.Thread(target=run, name="orca-ai-agent-http", daemon=True).start()
+    deadline = time.monotonic() + timeout
+    while True:
+        if cancel.is_set():
+            raise RequestCancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        try:
+            kind, value = results.get(timeout=min(WORKER_POLL_SECONDS, remaining))
+        except queue.Empty:
+            continue
+        if kind == "err":
+            raise value
+        return value
+
+
+def _is_transient(error: BaseException) -> bool:
+    if isinstance(error, GeminiHTTPError):
+        return error.code in TRANSIENT_HTTP_CODES
+    return isinstance(error, TransientNetworkError)
+
+
+def _backoff_delay(retry_index: int) -> float:
+    """~1 s, ~2 s, ~4 s ... plus up to 25% random jitter (retry_index starts at 0)."""
+    base = RETRY_BASE_DELAY_SECONDS * (2 ** retry_index)
+    return base + random.uniform(0.0, base * RETRY_JITTER_FRACTION)
+
+
+def _retry_transient(
+    attempt: Any,
+    cancel: threading.Event,
+    deadline: float,
+    on_retry: Any = None,
+) -> Any:
+    """Call attempt(); retry transient failures with backoff.
+
+    Every wait is interruptible (cancel.wait) and the total deadline is respected: when the next
+    backoff would not fit before the deadline, the last error is raised instead of waiting.
+    The number of retries performed is attached to the raised error as `.retries`.
+    """
+    retries = 0
+    while True:
+        if cancel.is_set():
+            raise RequestCancelled()
+        try:
+            return attempt()
+        except (GeminiHTTPError, TransientNetworkError) as error:
+            if not _is_transient(error):
+                raise
+            delay = _backoff_delay(retries)
+            if retries >= MAX_TRANSIENT_RETRIES or deadline - time.monotonic() <= delay:
+                error.retries = retries  # type: ignore[attr-defined]
+                raise
+            if on_retry is not None:
+                on_retry(retries + 1, delay)
+            if cancel.wait(delay):
+                raise RequestCancelled() from None
+            retries += 1
+
+
+def _request_completion(
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    cancel: threading.Event,
+    deadline: float,
+    on_retry: Any = None,
+) -> dict[str, Any]:
+    state = {"full": True}
+
+    def attempt() -> dict[str, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        payload = _build_payload(model, messages, state["full"])
+        socket_timeout = min(GEMINI_HTTP_TIMEOUT_SECONDS, remaining)
+        try:
+            return _call_with_deadline(
+                lambda: _post_chat_completion(api_key, payload, socket_timeout), cancel, remaining
+            )
+        except GeminiHTTPError as error:
+            # 400 usually means an optional field is not supported by this model: retry once
+            # without them (not counted as a transient retry). Never when the key was rejected.
+            if error.code == 400 and state["full"] and "api key" not in error.message.lower():
+                state["full"] = False
+                return attempt()
+            raise
+
+    return _retry_transient(attempt, cancel, deadline, on_retry)
+
+
+def _model_sort_key(name: str) -> tuple[Any, ...]:
+    lowered = name.lower()
+    family = 0 if lowered.startswith("gemini") else 1
+    match = re.search(r"(\d+(?:\.\d+)*)", lowered)
+    version = tuple(-int(part) for part in match.group(1).split(".")) if match else (0,)
+    if "flash-lite" in lowered or "lite" in lowered:
+        tier = 2
+    elif "flash" in lowered:
+        tier = 0
+    elif "pro" in lowered:
+        tier = 1
+    else:
+        tier = 3
+    unstable = any(token in lowered for token in ("preview", "exp", "latest"))
+    return (family, version, tier, unstable, lowered)
+
+
+def _model_names(data: Any) -> list[str]:
+    """Chat-capable model names from a model-list response, filtered, de-duplicated and sorted.
+
+    Accepts the OpenAI-compatible shape ({"data": [{"id": "models/..."}]}) and the native shape
+    ({"models": [{"name": "models/...", "supportedGenerationMethods": [...]}]}).
+    """
+    if not isinstance(data, dict):
+        return []
+    items = data.get("data")
+    if not isinstance(items, list):
+        items = data.get("models")
+    names: set[str] = set()
+    for item in items if isinstance(items, list) else []:
+        raw: Any = item
+        if isinstance(item, dict):
+            raw = item.get("id") or item.get("name")
+            methods = item.get("supportedGenerationMethods")
+            if isinstance(methods, list) and "generateContent" not in methods:
+                continue
+        name = str(raw or "").strip()
+        if name.startswith("models/"):
+            name = name[len("models/"):]
+        lowered = name.lower()
+        if not MODEL_PATTERN.fullmatch(name):
+            continue
+        if not lowered.startswith(("gemini", "gemma")):
+            continue
+        if any(token in lowered for token in MODEL_EXCLUDE_TOKENS):
+            continue
+        names.add(name)
+    return sorted(names, key=_model_sort_key)[:MAX_MODELS]
+
+
+def _fetch_model_names(
+    api_key: str, cancel: threading.Event, deadline: float, on_retry: Any = None
+) -> list[str]:
+    def attempt() -> dict[str, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        socket_timeout = min(MODELS_HTTP_TIMEOUT_SECONDS, remaining)
+        return _call_with_deadline(
+            lambda: _get_models(api_key, socket_timeout), cancel, remaining
+        )
+
+    return _model_names(_retry_transient(attempt, cancel, deadline, on_retry))
+
+
+def _response_text(data: dict[str, Any]) -> str:
+    """Return the model text, or raise a clear error for blocked/truncated/empty responses."""
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        raise RuntimeError("Gemini returned no candidates (the request may have been filtered).")
+    reason = str(choice.get("finish_reason") or "").lower()
+    if reason == "length":
+        raise RuntimeError(
+            "Gemini's answer was cut off by the output token limit (thinking tokens count "
+            "toward it). Try a shorter or more specific request."
+        )
+    if reason == "content_filter":
+        raise RuntimeError("Gemini's answer was blocked by its safety filters.")
+    if reason not in {"", "stop"}:
+        raise RuntimeError(f"Gemini stopped before finishing its answer ({reason}).")
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text", "")) for part in content if isinstance(part, dict)
+        )
+    text = str(content or "").strip()
+    if not text:
+        raise RuntimeError("Gemini returned an empty response.")
+    return text
+
+
+def _friendly_api_error(error: Any) -> str:
+    code = getattr(error, "code", None)
+    retries = int(getattr(error, "retries", 0) or 0)
+    after = f" after {retries} automatic {'retry' if retries == 1 else 'retries'}" if retries else ""
+    messages = {
+        400: "Gemini rejected the request. Check the API key and model name.",
+        401: "Gemini rejected the API key.",
+        403: "The API key is not allowed to use this model or API.",
+        404: "Gemini could not find this model. Check the model name.",
+        429: "The Gemini quota or rate limit was exceeded. Try again later.",
+        503: (
+            f"Gemini's servers are experiencing a temporary surge in requests (HTTP 503){after}. "
+            "Please try again in a moment, or switch to a different model."
+        ),
+    }
+    if code in messages:
+        text = messages[code]
+    elif isinstance(code, int) and code in TRANSIENT_HTTP_CODES:
+        text = (
+            f"Gemini had a temporary server problem (HTTP {code}){after}. "
+            "Please try again in a moment, or switch to a different model."
+        )
+    elif isinstance(code, int) and code >= 500:
+        text = f"The Gemini service is unavailable (HTTP {code}). Try again later."
+    else:
+        text = "The Gemini request failed" + (f" (HTTP {code})." if code else ".")
+    detail = str(getattr(error, "message", "") or "").strip()
+    return f"{text} {detail[:200]}".strip() if detail else text
+
+
+def _failure_message(error: BaseException) -> str:
+    """Readable text for the failures a Gemini request can end with."""
+    if isinstance(error, TimeoutError):
+        return "Gemini did not respond in time. Please try again."
+    if isinstance(error, GeminiHTTPError):
+        return _friendly_api_error(error)
+    if isinstance(error, TransientNetworkError):
+        retries = int(getattr(error, "retries", 0) or 0)
+        after = f" (still failing after {retries} automatic retries)" if retries else ""
+        return f"{error}{after}. Check your connection and try again."
+    return str(error)
 
 
 @dataclass(frozen=True)
 class ParameterSpec:
-    """Serialization and validation rules for one whitelisted preset option."""
+    """Serialization and validation rules for one whitelisted preset option.
+
+    The bounds are deliberately conservative "plausible FDM" limits, much tighter than the native
+    ConfigOptionDef limits (FLT_MAX / INT_MAX). Dynamic limits taken from the live printer or
+    filament preset are applied on top of them (see AIAgentCapability._effective_spec and
+    _compute_cautions).
+
+    adaptive_shape marks options whose scalar-vs-vector shape could not be confirmed against the
+    native PrintConfig. They are treated as scalars unless the current value is a comma-separated
+    vector. [verifikasi] against PrintConfig.cpp and remove the flag once the shape is certain.
+    """
 
     description: str
     kind: str
@@ -223,6 +731,7 @@ class ParameterSpec:
     nullable: bool = False
     exclusive_minimum: bool = False
     choices: tuple[str, ...] = ()
+    adaptive_shape: bool = False
 
     @property
     def is_vector(self) -> bool:
@@ -235,28 +744,28 @@ class ParameterSpec:
 
 PROCESS_PARAMETERS: dict[str, ParameterSpec] = {
     "layer_height": ParameterSpec(
-        "Layer height in millimetres.",
+        "Layer height in millimetres; it must not exceed the nozzle diameter.",
         "number",
         0.01,
-        MAX_FLOAT_VALUE,
+        2.0,
     ),
     "wall_loops": ParameterSpec(
         "Number of solid wall loops.",
         "integer",
         0.0,
-        1_000.0,
+        30.0,
     ),
     "top_shell_layers": ParameterSpec(
         "Number of solid top layers.",
         "integer",
         0.0,
-        float(MAX_INT_VALUE),
+        100.0,
     ),
     "bottom_shell_layers": ParameterSpec(
         "Number of solid bottom layers.",
         "integer",
         0.0,
-        float(MAX_INT_VALUE),
+        100.0,
     ),
     "sparse_infill_density": ParameterSpec(
         "Sparse infill density as a serialized percentage, for example 15%.",
@@ -296,33 +805,35 @@ PROCESS_PARAMETERS: dict[str, ParameterSpec] = {
             "octagramspiral",
         ),
     ),
+    # Speeds: the process options are believed to be scalar floats in PrintConfig and not nullable.
+    # [verifikasi] adaptive_shape keeps vector-valued presets working until that is confirmed.
     "initial_layer_speed": ParameterSpec(
         "First-layer speed in mm/s.",
-        "number_vector",
+        "number",
         1.0,
-        MAX_FLOAT_VALUE,
-        nullable=True,
+        1000.0,
+        adaptive_shape=True,
     ),
     "outer_wall_speed": ParameterSpec(
         "Outer-wall speed in mm/s.",
-        "number_vector",
+        "number",
         1.0,
-        MAX_FLOAT_VALUE,
-        nullable=True,
+        1000.0,
+        adaptive_shape=True,
     ),
     "inner_wall_speed": ParameterSpec(
         "Inner-wall speed in mm/s.",
-        "number_vector",
+        "number",
         1.0,
-        MAX_FLOAT_VALUE,
-        nullable=True,
+        1000.0,
+        adaptive_shape=True,
     ),
     "sparse_infill_speed": ParameterSpec(
         "Sparse-infill speed in mm/s.",
-        "number_vector",
+        "number",
         1.0,
-        MAX_FLOAT_VALUE,
-        nullable=True,
+        1000.0,
+        adaptive_shape=True,
     ),
     "enable_support": ParameterSpec(
         "Whether support generation is enabled.",
@@ -350,74 +861,85 @@ PROCESS_PARAMETERS: dict[str, ParameterSpec] = {
 }
 
 FILAMENT_PARAMETERS: dict[str, ParameterSpec] = {
+    # filament_flow_ratio is a plain Floats option in PrintConfig (not Floats nullable), so "nil" is
+    # rejected. [verifikasi] If the native option is nullable, set nullable=True again.
     "filament_flow_ratio": ParameterSpec(
         "Filament flow multiplier.",
         "number_vector",
-        0.0,
-        2.0,
-        nullable=True,
-        exclusive_minimum=True,
+        0.5,
+        1.5,
     ),
     "filament_density": ParameterSpec(
         "Filament density in g/cm3.",
         "number_vector",
         0.0,
-        MAX_FLOAT_VALUE,
+        25.0,
     ),
     "filament_retraction_length": ParameterSpec(
         "Retraction distance in millimetres.",
         "number_vector",
         0.0,
-        MAX_FLOAT_VALUE,
+        30.0,
         nullable=True,
     ),
     "filament_retraction_speed": ParameterSpec(
         "Retraction speed in mm/s.",
         "number_vector",
         0.0,
-        MAX_FLOAT_VALUE,
+        500.0,
         nullable=True,
     ),
     "filament_max_volumetric_speed": ParameterSpec(
         "Maximum volumetric speed in mm3/s; it must be greater than zero.",
         "number_vector",
         0.0,
-        MAX_FLOAT_VALUE,
+        100.0,
         exclusive_minimum=True,
     ),
     "nozzle_temperature": ParameterSpec(
         "Nozzle temperature in degrees Celsius.",
         "integer_vector",
-        0.0,
-        1_500.0,
+        150.0,
+        450.0,
     ),
     "nozzle_temperature_initial_layer": ParameterSpec(
         "First-layer nozzle temperature in degrees Celsius.",
         "integer_vector",
-        0.0,
-        1_500.0,
+        150.0,
+        450.0,
     ),
     "hot_plate_temp": ParameterSpec(
         "High Temp Plate bed temperature in degrees Celsius.",
         "integer_vector",
         0.0,
-        300.0,
+        150.0,
     ),
     "hot_plate_temp_initial_layer": ParameterSpec(
         "First-layer High Temp Plate bed temperature in degrees Celsius.",
         "integer_vector",
         0.0,
-        300.0,
+        150.0,
     ),
 }
 
 PARAMETER_SPECS = {**PROCESS_PARAMETERS, **FILAMENT_PARAMETERS}
 
+# Process speeds are additionally capped by the printer's own motion limits when they are known.
+SPEED_KEYS = frozenset(
+    {"initial_layer_speed", "outer_wall_speed", "inner_wall_speed", "sparse_infill_speed"}
+)
 
-def _redact_secret(text: str, secret: str = "") -> str:
-    if secret:
-        text = text.replace(secret, "***")
-    return GOOGLE_API_KEY_PATTERN.sub("***", text)
+
+def _redact_secret(text: Any, secret: str = "") -> str:
+    """Remove the active API key (also URL-encoded) and anything shaped like a credential."""
+    text = text if isinstance(text, str) else str(text)
+    secret = secret.strip() if isinstance(secret, str) else ""
+    if len(secret) >= MIN_REDACTABLE_SECRET_LENGTH:
+        for variant in (secret, quote(secret, safe="")):
+            text = text.replace(variant, "***")
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _describe_parameters(parameters: dict[str, ParameterSpec]) -> str:
@@ -435,9 +957,14 @@ def _describe_parameters(parameters: dict[str, ParameterSpec]) -> str:
                 "comma-separated integer vector" if spec.is_vector else "integer"
             )
         else:
-            details.append(
-                "comma-separated number vector" if spec.is_vector else "number"
-            )
+            if spec.adaptive_shape:
+                details.append(
+                    "number (a comma-separated vector only if the current value is one)"
+                )
+            else:
+                details.append(
+                    "comma-separated number vector" if spec.is_vector else "number"
+                )
 
         if spec.minimum is not None:
             if spec.exclusive_minimum:
@@ -455,11 +982,23 @@ def _describe_parameters(parameters: dict[str, ParameterSpec]) -> str:
 
 PRINTER_CONTEXT_PARAMETERS: dict[str, str] = {
     "printer_technology": "Printer technology.",
+    "printer_model": "Printer model.",
     "nozzle_diameter": "Nozzle diameter.",
+    "nozzle_type": "Nozzle material/type.",
     "min_layer_height": "Minimum layer height supported by the printer.",
     "max_layer_height": "Maximum layer height supported by the printer.",
     "printable_area": "Printable bed area.",
     "printable_height": "Printable height.",
+    # Used as a hard cap for process speeds. [verifikasi] that these keys are readable here.
+    "machine_max_speed_x": "Maximum X speed of the printer.",
+    "machine_max_speed_y": "Maximum Y speed of the printer.",
+}
+
+# Read-only filament context. The temperature range is used for soft warnings.
+FILAMENT_CONTEXT_PARAMETERS: dict[str, str] = {
+    "filament_type": "Filament material type, for example PLA.",
+    "nozzle_temperature_range_low": "Lowest recommended nozzle temperature.",
+    "nozzle_temperature_range_high": "Highest recommended nozzle temperature.",
 }
 
 RESPONSE_SCHEMA: dict[str, Any] = {
@@ -471,6 +1010,7 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         },
         "parameters": {
             "type": "array",
+            "maxItems": MAX_PARAMETERS,
             "description": "Preset changes proposed for the user to preview and apply.",
             "items": {
                 "type": "object",
@@ -479,7 +1019,7 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": ["process", "filament"],
                     },
-                    "key": {"type": "string"},
+                    "key": {"type": "string", "enum": sorted(PARAMETER_SPECS)},
                     "value": {"type": "string"},
                     "reason": {"type": "string"},
                 },
@@ -509,38 +1049,72 @@ target filament slot 1. Values must be OrcaSlicer's serialized config strings,
 for example 0.2 for a layer height, 15% for a percentage, 1/0 for a boolean,
 and the internal option name for a choice. A comma-separated vector value must
 keep exactly the same number of components as the current value and must contain
-the complete new vector. Layer height must fit the printer's current minimum and
-maximum layer-height limits when those limits are available. Propose the
-hot_plate_temp keys only when the current bed_type is High Temp Plate. Do not
-invent a key, enum value, or numeric value outside the listed constraints. Keep every
-value concise and use the current preset context to avoid unnecessary changes.
-If the request does not need a preset change, return an empty parameters array.
-If uncertain about a safe value, explain the uncertainty instead of inventing a
-parameter change.
+the complete new vector. Layer height must not exceed the nozzle diameter and
+should stay within the printer's layer-height limits when they are available.
+Process speeds must not exceed the printer's machine_max_speed_x/y when known.
+Keep nozzle temperatures inside the filament's recommended range
+(nozzle_temperature_range_low/high) when it is available, and consistent with the
+filament_type. Prefer small, incremental changes (roughly 20% or less) over
+drastic ones, and keep related settings consistent (for example, do not tune
+support settings while support is disabled unless you also enable it).
+Propose the hot_plate_temp keys only when the current bed_type is High Temp Plate.
+Do not invent a key, enum value, or numeric value outside the listed
+constraints. Keep every value concise and use the current preset context to avoid
+unnecessary changes. If the request does not need a preset change, return an
+empty parameters array. If uncertain about a safe value, explain the uncertainty
+instead of inventing a parameter change.
 """
 
 
-class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
-    """Runs one long-lived panel session on the Script async worker."""
+class _ChatRequest:
+    """One in-flight chat request, shared by the UI thread and its worker thread."""
+
+    __slots__ = ("request_id", "cancel")
+
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+        self.cancel = threading.Event()
+
+
+class AIAgentCapability(_SCRIPT_BASE):
+    """Docked panel session.
+
+    Threading model (no asyncio on purpose: creating an event loop makes Windows call
+    socket.bind through its self-pipe, which the plugin audit hook rejects):
+
+    * execute() is synchronous: it only opens the panel and returns.
+    * on_message() runs on the UI thread. It reads live preset state, answers cheap actions and
+      applies presets right there, and starts one worker thread per chat request.
+    * the chat worker runs the (blocking) Gemini call through _call_with_deadline(), which waits
+      on a queue with a deadline and a cancel Event.
+    """
 
     def __init__(self) -> None:
+        # The host rejects subclasses that override __init__ without initializing the base class
+        # ("__init__() must be called when overriding __init__"), so this must run first.
+        super().__init__()
         self.panel: Any = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._queue: asyncio.Queue[dict[str, Any]] | None = None
+        self._lock = threading.RLock()
         self._history: list[dict[str, str]] = []
+        self._active: _ChatRequest | None = None
         self._closing = False
-        self._cancelled = False
 
     def get_name(self) -> str:
-        return PLUGIN_TITLE
+        # The host reserves ";" in capability names.
+        return CAPABILITY_NAME.replace(";", ",")
 
-    async def execute(self):
-        if self._cancelled:
-            return orca.ExecutionResult.success("Orca AI Agent was cancelled.")
-        if self._loop is not None:
-            if self.panel is not None and self.panel.is_open():
-                self.panel.show()
-            return orca.ExecutionResult.success("Orca AI Agent is already open.")
+    def execute(self):
+        with self._lock:
+            panel = self.panel
+        if panel is not None:
+            try:
+                if panel.is_open():
+                    panel.show()
+                    return orca.ExecutionResult.success(
+                        f"Orca AI Agent v{PLUGIN_VERSION} is already open."
+                    )
+            except Exception:
+                pass  # Stale handle: open a new panel below.
 
         try:
             html = _load_panel_html()
@@ -550,157 +1124,182 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                 f"Unable to open Orca AI Agent: {error}",
             )
 
-        self._loop = asyncio.get_running_loop()
-        self._queue = asyncio.Queue()
         self._closing = False
-        pending_tasks: set[asyncio.Task[Any]] = set()
-        fatal_error: Exception | None = None
-
         try:
-            self.panel = orca.host.ui.create_dock_panel(
-                html=html,
-                title=PLUGIN_TITLE,
-                width=380,
-                height=550,
-                on_message=self.on_message,
-                on_close=self.on_close,
-                dock="right",
-            )
-
-            while True:
-                message = await self._queue.get()
-                action = str(message.get("action", "")).strip().lower()
-                if action == "__close__":
-                    break
-
-                request_id: str | None = None
-                if action in {"chat", "apply", "clear_history"}:
-                    request_id = self._request_id(message)
-                    if request_id is None:
-                        self._post_error(
-                            ValueError("A valid request_id is required for this action."),
-                            code="invalid_request",
-                        )
-                        message.clear()
-                        continue
-                    if any(not task.done() for task in pending_tasks):
-                        self._post_error(
-                            RuntimeError("Another Orca AI Agent request is already in progress."),
-                            request_id=request_id,
-                        )
-                        message.clear()
-                        continue
-
-                if action == "chat":
-                    self._post(
-                        {
-                            "type": "ack",
-                            "action": "chat",
-                            "request_id": request_id,
-                        }
-                    )
-
-                    # Keep the API key only in the request task. Do not leave it referenced by the
-                    # long-lived execute loop while it waits for the next panel message.
-                    chat_message = dict(message)
-                    task = asyncio.create_task(self._handle_chat(chat_message))
-                    message.clear()
-                    del chat_message
-                    pending_tasks.add(task)
-
-                    def task_done(
-                        completed: asyncio.Task[Any],
-                        completed_request_id: str | None = request_id,
-                    ) -> None:
-                        pending_tasks.discard(completed)
-                        if completed.cancelled():
-                            return
-                        error = completed.exception()
-                        if error is not None:
-                            self._post_error(error, request_id=completed_request_id)
-
-                    task.add_done_callback(task_done)
-                    continue
-
-                try:
-                    await self._handle_action(action, message)
-                except Exception as error:
-                    self._post_error(error, request_id=request_id)
-        except asyncio.CancelledError:
-            raise
+            ui = orca.host.ui
+            if hasattr(ui, "create_dock_panel"):
+                new_panel = ui.create_dock_panel(
+                    html=html,
+                    title=PLUGIN_TITLE,
+                    width=380,
+                    height=550,
+                    on_message=self.on_message,
+                    on_close=self.on_close,
+                    dock="right",
+                )
+            else:
+                # Builds without Docked Panels only have popup windows.
+                new_panel = ui.create_window(
+                    html=html,
+                    title=PLUGIN_TITLE,
+                    on_message=self.on_message,
+                    on_close=self.on_close,
+                )
         except Exception as error:
-            fatal_error = error
-            self._post_error(error)
-        finally:
-            tasks = list(pending_tasks)
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-            self._loop = None
-            self._queue = None
-            panel = self.panel
-            self.panel = None
-            try:
-                if panel is not None and panel.is_open():
-                    panel.close()
-            except Exception:
-                pass
-
-        if fatal_error is not None:
             return orca.ExecutionResult.failure(
                 orca.PluginResult.RecoverableError,
-                f"Orca AI Agent failed: {fatal_error}",
+                f"Unable to open Orca AI Agent: {error}",
             )
-        return orca.ExecutionResult.success("Orca AI Agent session closed.")
+        # The panel may already have sent "ready" before this assignment; the page re-sends it
+        # (250 ms, 1 s, 3 s and every 5 s while the context is missing), so state still arrives.
+        with self._lock:
+            self.panel = new_panel
+        return orca.ExecutionResult.success(f"Orca AI Agent v{PLUGIN_VERSION} opened.")
 
-    def on_message(self, msg: Any) -> None:
-        """Capture live preset state on the UI thread, then queue the copied message."""
-        if not isinstance(msg, dict) or self._closing:
-            return
-
-        message = dict(msg)
-        action = str(message.get("action", "")).strip().lower()
-        if action in {"ready", "chat", "apply"}:
-            # PresetBundle and Preset objects are live GUI state. Read them here on the UI
-            # thread and copy only plain values for the Script worker.
-            message["context"] = self._snapshot_context()
-
-        loop = self._loop
-        if loop is None:
-            return
-
-        try:
-            loop.call_soon_threadsafe(self._enqueue_message, message)
-        except RuntimeError:
-            # The panel can outlive the loop for a short interval while it is closing.
-            pass
-
+    # ------------------------------------------------------------------ host callbacks
     def on_close(self) -> None:
-        """Stop the session when the user closes the Docked Panel."""
-        self.panel = None
-        self._closing = True
-        self._schedule({"action": "__close__"})
+        """The user closed the panel: stop any in-flight request."""
+        with self._lock:
+            self.panel = None
+        self._stop_requests()
 
     def on_cancelled(self) -> None:
-        """Let plugin unload wake a worker that is waiting for panel messages."""
-        self._cancelled = True
-        self._closing = True
-        self._schedule({"action": "__close__"})
-
-    def _enqueue_message(self, message: dict[str, Any]) -> None:
-        if self._queue is not None:
-            self._queue.put_nowait(message)
-
-    def _schedule(self, message: dict[str, Any]) -> None:
-        loop = self._loop
-        if loop is None:
-            return
+        """Plugin unload/cancel: stop requests and close the panel. Nothing is latched, so the next
+        execute() always starts clean."""
+        with self._lock:
+            panel = self.panel
+            self.panel = None
+        self._stop_requests()
         try:
-            loop.call_soon_threadsafe(self._enqueue_message, message)
-        except RuntimeError:
+            if panel is not None and panel.is_open():
+                panel.close()
+        except Exception:
             pass
+
+    def on_unload(self) -> None:
+        self.on_cancelled()
+
+    def _stop_requests(self) -> None:
+        self._closing = True
+        with self._lock:
+            request, self._active = self._active, None
+        if request is not None:
+            request.cancel.set()
+
+    def on_message(self, msg: Any) -> None:
+        """UI-thread entry point for every panel message."""
+        if not isinstance(msg, dict) or self._closing:
+            return
+        message = dict(msg)
+        request_id = self._request_id(message)
+        try:
+            action = str(message.get("action", "")).strip().lower()
+            if action in {"ready", "chat", "apply"}:
+                # PresetBundle and Preset objects are live GUI state: read them here, on the UI
+                # thread, and hand only plain copies to worker threads.
+                message["context"] = self._snapshot_context()
+            self._dispatch(action, message)
+        except Exception as error:
+            self._post_error(error, request_id=request_id)
+        finally:
+            message.clear()
+
+    def _dispatch(self, action: str, message: dict[str, Any]) -> None:
+        if action == "ready":
+            self._post_state(message.get("context"))
+            return
+        if action == "cancel":
+            self._handle_cancel(message)
+            return
+        if action not in {"chat", "apply", "clear_history", "fetch_models"}:
+            raise ValueError(f"Unknown panel action: {action or '<empty>'}")
+
+        request_id = self._request_id(message)
+        if request_id is None:
+            self._post_error(
+                ValueError("A valid request_id is required for this action."),
+                code="invalid_request",
+            )
+            return
+        with self._lock:
+            busy = self._active is not None
+        if busy:
+            self._post_error(
+                RuntimeError("Another Orca AI Agent request is already in progress."),
+                request_id=request_id,
+            )
+            return
+
+        if action == "chat":
+            self._launch_worker(request_id, message, "chat", self._chat_worker)
+        elif action == "fetch_models":
+            self._launch_worker(request_id, message, "fetch_models", self._models_worker)
+        elif action == "apply":
+            self._handle_apply(request_id, message)
+        else:
+            self._handle_clear(request_id)
+
+    def _handle_cancel(self, message: dict[str, Any]) -> None:
+        """Cancel an in-flight chat request and keep the backend history in sync with the panel.
+
+        The panel sends "cancel" when the user cancels or when its own timer expires. If the
+        response had already been produced (and recorded in the history) the panel has dropped it,
+        so the matching history turn is rolled back.
+        """
+        request_id = self._request_id(message)
+        if request_id is None:
+            return
+        cancelled = False
+        with self._lock:
+            request = self._active
+            if request is not None and request.request_id == request_id:
+                self._active = None
+                cancelled = True
+        if cancelled:
+            request.cancel.set()
+        rolled_back = self._rollback_history(request_id)
+        self._post(
+            {
+                "type": "cancelled",
+                "request_id": request_id,
+                "cancelled": cancelled,
+                "history_rolled_back": rolled_back,
+            }
+        )
+
+    def _rollback_history(self, request_id: str) -> bool:
+        with self._lock:
+            before = len(self._history)
+            self._history = [
+                item for item in self._history if item.get("request_id") != request_id
+            ]
+            return len(self._history) != before
+
+    def _handle_clear(self, request_id: str) -> None:
+        with self._lock:
+            self._history.clear()
+        self._post({"type": "ack", "action": "clear_history", "request_id": request_id})
+        self._post({"type": "history_cleared", "request_id": request_id})
+
+    def _handle_apply(self, request_id: str, message: dict[str, Any]) -> None:
+        self._post({"type": "ack", "action": "apply", "request_id": request_id})
+        try:
+            result = self._apply_parameters(
+                message.get("parameters"),
+                message.get("target"),
+                message.get("context"),
+            )
+        except Exception as error:
+            self._post_error(error, code="apply_failed", request_id=request_id)
+            return
+        self._post(
+            {
+                "type": "apply_result",
+                "success": True,
+                "request_id": request_id,
+                **result,
+            }
+        )
 
     @staticmethod
     def _request_id(message: dict[str, Any]) -> str | None:
@@ -712,79 +1311,122 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
             return None
         return request_id
 
-    async def _handle_action(self, action: str, message: dict[str, Any]) -> None:
-        if action == "ready":
-            self._post_state(message.get("context"))
-        elif action == "clear_history":
-            request_id = self._request_id(message)
-            if request_id is None:
-                raise ValueError("A valid request_id is required to clear chat history.")
-            self._history.clear()
-            self._post(
-                {
-                    "type": "ack",
-                    "action": "clear_history",
-                    "request_id": request_id,
-                }
-            )
-            self._post(
-                {
-                    "type": "history_cleared",
-                    "request_id": request_id,
-                }
-            )
-        elif action == "apply":
-            request_id = self._request_id(message)
-            if request_id is not None:
+    def _launch_worker(
+        self, request_id: str, message: dict[str, Any], action: str, worker: Any
+    ) -> None:
+        """Register the request (single flight) and run `worker` on its own daemon thread."""
+        request = _ChatRequest(request_id)
+        with self._lock:
+            self._active = request
+        self._post({"type": "ack", "action": action, "request_id": request_id})
+
+        # The worker gets its own copy (it holds the API key); the UI-thread copy is cleared by
+        # on_message(). The worker clears its copy when it finishes.
+        worker_message = dict(message)
+        try:
+            threading.Thread(
+                target=worker,
+                args=(request, worker_message),
+                name=f"orca-ai-agent-{action}",
+                daemon=True,
+            ).start()
+        except Exception:
+            with self._lock:
+                if self._active is request:
+                    self._active = None
+            raise
+
+    def _models_worker(self, request: _ChatRequest, message: dict[str, Any]) -> None:
+        """Fetch the model list. The key is only sent as the Authorization header and is redacted
+        from every error that reaches the panel."""
+        api_key = ""
+        try:
+            raw_api_key = message.get("api_key")
+            api_key = raw_api_key.strip() if isinstance(raw_api_key, str) else ""
+            if len(api_key) > MAX_API_KEY_LENGTH:
+                raise ValueError("The API key is unexpectedly long.")
+            if not api_key:
                 self._post(
                     {
-                        "type": "ack",
-                        "action": "apply",
-                        "request_id": request_id,
+                        "type": "error",
+                        "code": "missing_api_key",
+                        "message": "Enter a Google AI Studio API key before fetching models.",
+                        "request_id": request.request_id,
                     }
                 )
-            try:
-                result = await self._apply_parameters(
-                    message.get("parameters"),
-                    message.get("target"),
-                    message.get("context"),
-                )
-            except Exception as error:
-                self._post_error(error, code="apply_failed", request_id=request_id)
                 return
+            deadline = time.monotonic() + MODELS_TOTAL_TIMEOUT_SECONDS
+            try:
+                names = _fetch_model_names(api_key, request.cancel, deadline)
+            except (TimeoutError, GeminiHTTPError, TransientNetworkError) as error:
+                raise RuntimeError(_failure_message(error)) from None
+            if request.cancel.is_set():
+                return
+            if not names:
+                raise RuntimeError(
+                    "Gemini returned no chat-capable models for this API key. "
+                    "You can still type a model name manually."
+                )
             self._post(
                 {
-                    "type": "apply_result",
-                    "success": True,
-                    "request_id": request_id,
-                    **result,
+                    "type": "models",
+                    "models": names,
+                    "default_model": DEFAULT_MODEL,
+                    "request_id": request.request_id,
                 }
             )
-        else:
-            raise ValueError(f"Unknown panel action: {action or '<empty>'}")
+        except RequestCancelled:
+            pass
+        except Exception as error:
+            if not request.cancel.is_set():
+                self._post_error(error, api_key, request_id=request.request_id)
+        finally:
+            message.clear()
+            with self._lock:
+                if self._active is request:
+                    self._active = None
 
-    async def _handle_chat(self, message: dict[str, Any]) -> None:
-        request_id = self._request_id(message)
+    def _post_retry_notice(self, request: _ChatRequest, attempt: int, delay: float) -> None:
+        if request.cancel.is_set():
+            return
+        self._post(
+            {
+                "type": "thinking",
+                "message": (
+                    f"Gemini is busy. Retrying in {max(1, round(delay))} s "
+                    f"(attempt {attempt}/{MAX_TRANSIENT_RETRIES})…"
+                ),
+                "request_id": request.request_id,
+            }
+        )
+
+    def _chat_worker(self, request: _ChatRequest, message: dict[str, Any]) -> None:
+        api_key = ""
+        try:
+            raw_api_key = message.get("api_key")
+            api_key = raw_api_key.strip() if isinstance(raw_api_key, str) else ""
+            self._run_chat(request, message, api_key)
+        except RequestCancelled:
+            pass
+        except Exception as error:
+            if not request.cancel.is_set():
+                self._post_error(error, api_key, request_id=request.request_id)
+        finally:
+            message.clear()
+            with self._lock:
+                if self._active is request:
+                    self._active = None
+
+    def _run_chat(self, request: _ChatRequest, message: dict[str, Any], api_key: str) -> None:
+        request_id = request.request_id
         raw_prompt = message.get("prompt")
         prompt = raw_prompt.strip() if isinstance(raw_prompt, str) else ""
         if not prompt:
-            self._post_error(ValueError("The prompt is empty."), request_id=request_id)
-            return
+            raise ValueError("The prompt is empty.")
         if len(prompt) > MAX_PROMPT_LENGTH:
-            self._post_error(
-                ValueError(f"The prompt exceeds {MAX_PROMPT_LENGTH} characters."),
-                request_id=request_id,
-            )
-            return
-
-        raw_api_key = message.get("api_key")
-        api_key = raw_api_key.strip() if isinstance(raw_api_key, str) else ""
+            raise ValueError(f"The prompt exceeds {MAX_PROMPT_LENGTH} characters.")
         if len(api_key) > MAX_API_KEY_LENGTH:
-            self._post_error(
-                ValueError("The API key is unexpectedly long."),
-                request_id=request_id,
-            )
-            return
+            raise ValueError("The API key is unexpectedly long.")
         if not api_key:
             self._post(
                 {
@@ -804,25 +1446,13 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
         model = raw_model.strip() if isinstance(raw_model, str) else ""
         model = model or DEFAULT_MODEL
         if not MODEL_PATTERN.fullmatch(model):
-            self._post_error(
-                ValueError("The Gemini model name is invalid."),
-                request_id=request_id,
-            )
-            return
+            raise ValueError("The Gemini model name is invalid.")
 
         context = message.get("context")
         if not isinstance(context, dict):
-            self._post_error(
-                RuntimeError("The current preset context is unavailable."),
-                request_id=request_id,
-            )
-            return
+            raise RuntimeError("The current preset context is unavailable.")
         if context.get("error"):
-            self._post_error(
-                RuntimeError(str(context["error"])),
-                request_id=request_id,
-            )
-            return
+            raise RuntimeError(str(context["error"]))
 
         self._post(
             {
@@ -831,17 +1461,11 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                 "request_id": request_id,
             }
         )
-        try:
-            reply, parameters, target, warning = await self._generate_reply(
-                prompt,
-                api_key,
-                model,
-                context,
-            )
-        except Exception as error:
-            self._post_error(error, api_key, request_id=request_id)
+        reply, parameters, target, warning = self._generate_reply(
+            prompt, api_key, model, context, request
+        )
+        if request.cancel.is_set():
             return
-
         self._post(
             {
                 "type": "chat_response",
@@ -853,21 +1477,14 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
             }
         )
 
-    async def _generate_reply(
+    def _generate_reply(
         self,
         prompt: str,
         api_key: str,
         model: str,
         context: dict[str, Any],
+        request: _ChatRequest,
     ) -> tuple[str, list[dict[str, str]], dict[str, Any] | None, str | None]:
-        try:
-            from google import genai
-            from google.genai import types
-        except ImportError as error:
-            raise RuntimeError(
-                "The google-genai package is unavailable. Reinstall the plugin dependencies."
-            ) from error
-
         context_text = _redact_secret(
             json.dumps(context, ensure_ascii=False, indent=2),
             api_key,
@@ -879,61 +1496,36 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
             f"{prompt}"
         )
 
-        contents = [
-            types.Content(
-                role=item["role"],
-                parts=[types.Part.from_text(text=item["text"])],
+        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        with self._lock:
+            history = list(self._history[-MAX_HISTORY_MESSAGES:])
+        for item in history:
+            messages.append(
+                {
+                    "role": "assistant" if item["role"] == "model" else "user",
+                    "content": item["text"],
+                }
             )
-            for item in self._history[-MAX_HISTORY_MESSAGES:]
-        ]
-        contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=request_text)],
-            )
-        )
+        messages.append({"role": "user", "content": request_text})
 
-        client = genai.Client(
-            api_key=api_key,
-            vertexai=False,
-            http_options=types.HttpOptions(
-                api_version="v1",
-                timeout=60_000,
-                # Keep the request within the panel's response window. The SDK otherwise
-                # retries up to five times, which can outlive the UI timeout and leave a
-                # stale backend request running after the user has already retried.
-                retry_options=types.HttpRetryOptions(attempts=1),
-            ),
-        )
-        async_client = client.aio
+        deadline = time.monotonic() + GEMINI_TOTAL_TIMEOUT_SECONDS
         try:
-            response = await async_client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_json_schema=RESPONSE_SCHEMA,
-                    max_output_tokens=4096,
-                ),
+            response = _request_completion(
+                api_key,
+                model,
+                messages,
+                request.cancel,
+                deadline,
+                on_retry=lambda attempt, delay: self._post_retry_notice(request, attempt, delay),
             )
-        finally:
-            try:
-                await async_client.aclose()
-            except Exception:
-                pass
+        except (TimeoutError, GeminiHTTPError, TransientNetworkError) as error:
+            raise RuntimeError(_failure_message(error)) from None
 
-        text = str(getattr(response, "text", "") or "").strip()
-        if not text:
-            parts = getattr(response, "parts", None) or []
-            text = "".join(str(getattr(part, "text", "") or "") for part in parts).strip()
-        if not text:
-            raise RuntimeError("Gemini returned an empty response.")
-
+        text = _response_text(response)
         data = self._parse_json_response(text)
         raw_reply = data.get("reply")
         reply = raw_reply.strip() if isinstance(raw_reply, str) else ""
-        reply = reply[:MAX_REPLY_LENGTH]
+        reply = _redact_secret(reply[:MAX_REPLY_LENGTH], api_key)
         if not reply:
             raise RuntimeError("Gemini returned a response without an explanation.")
 
@@ -965,14 +1557,18 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                     "were not shown for review."
                 )
 
+        self._attach_cautions(parameters, context)
         self._add_current_values(parameters, context)
-        self._history.extend(
-            [
-                {"role": "user", "text": prompt},
-                {"role": "model", "text": reply},
-            ]
-        )
-        self._trim_history()
+        with self._lock:
+            if request.cancel.is_set():
+                raise RequestCancelled()
+            self._history.extend(
+                [
+                    {"role": "user", "text": prompt, "request_id": request.request_id},
+                    {"role": "model", "text": reply, "request_id": request.request_id},
+                ]
+            )
+            self._trim_history()
 
         return reply, parameters, target, warning
 
@@ -1276,66 +1872,186 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
         value: str,
         context: dict[str, Any] | None,
     ) -> bool:
+        """Hard check: a layer height must not exceed the smallest configured nozzle diameter.
+
+        [verifikasi] against Print::validate. min_layer_height / max_layer_height are intentionally
+        NOT hard limits here: they drive adaptive (variable) layer heights, and a fixed layer height
+        below/above them is valid. They only produce a warning (see _compute_cautions).
+        """
         if context is None:
             return True
-
-        printer = context.get("printer")
-        if not isinstance(printer, dict):
-            return False
-
         try:
             layer_height = float(value)
         except ValueError:
             return False
 
-        minimum = 0.01
-        maximum: float | None = None
-
-        nozzle_values = cls._numeric_components(printer.get("nozzle_diameter"))
-        positive_nozzles = [
-            number for number in (nozzle_values or []) if number > 0
-        ]
-        if not positive_nozzles:
-            # Without the printer's nozzle limit, a layer-height proposal cannot be validated.
-            return False
-        # Print validation rejects a layer height greater than any nozzle in use.
-        maximum = min(positive_nozzles)
-
-        min_values = cls._numeric_components(printer.get("min_layer_height"))
-        if min_values:
-            for index, number in enumerate(min_values):
-                if number <= 0:
-                    number = 0.07  # OrcaSlicer's default adaptive-layer minimum.
-                minimum = max(minimum, number)
-                if nozzle_values and index < len(nozzle_values):
-                    nozzle = nozzle_values[index]
-                    if nozzle > 0:
-                        maximum = nozzle if maximum is None else min(maximum, nozzle)
-
-        max_values = cls._numeric_components(printer.get("max_layer_height"))
-        if max_values:
-            for index, number in enumerate(max_values):
-                if number <= 0:
-                    nozzle = (
-                        nozzle_values[index]
-                        if nozzle_values and index < len(nozzle_values)
-                        else (min(nozzle_values) if nozzle_values else 0.0)
-                    )
-                    if nozzle > 0:
-                        number = 0.75 * nozzle
-                if number > 0:
-                    effective_maximum = max(minimum, number)
-                    maximum = (
-                        effective_maximum
-                        if maximum is None
-                        else min(maximum, effective_maximum)
-                    )
-
-        return (
-            layer_height >= minimum
-            and maximum is not None
-            and layer_height <= maximum
+        printer = context.get("printer")
+        nozzle_values = (
+            cls._numeric_components(printer.get("nozzle_diameter"))
+            if isinstance(printer, dict)
+            else None
         )
+        positive_nozzles = [number for number in (nozzle_values or []) if number > 0]
+        if not positive_nozzles:
+            # Unknown nozzle: the static bounds still apply and a warning is attached later.
+            return True
+        return layer_height <= min(positive_nozzles) + 1e-6
+
+    @classmethod
+    def _effective_spec(
+        cls,
+        key: str,
+        spec: ParameterSpec,
+        current_value: Any,
+        context: dict[str, Any] | None,
+    ) -> ParameterSpec:
+        """Adapt a static spec to the live preset/printer context."""
+        if spec.adaptive_shape and isinstance(current_value, str) and "," in current_value:
+            spec = replace(spec, kind="number_vector")
+        if key in SPEED_KEYS and isinstance(context, dict):
+            printer = context.get("printer")
+            if isinstance(printer, dict):
+                limits: list[float] = []
+                for limit_key in ("machine_max_speed_x", "machine_max_speed_y"):
+                    numbers = cls._numeric_components(printer.get(limit_key))
+                    if numbers and numbers[0] > 0:
+                        limits.append(numbers[0])
+                if limits and (spec.maximum is None or min(limits) < spec.maximum):
+                    spec = replace(spec, maximum=min(limits))
+        return spec
+
+    @staticmethod
+    def _percent_numbers(value: Any) -> list[float] | None:
+        """Parse "1,2" / "15%" into floats; None for nil or anything non-numeric."""
+        if not isinstance(value, str):
+            return None
+        numbers: list[float] = []
+        for component in value.split(","):
+            try:
+                number = float(component.strip().rstrip("%").strip())
+            except ValueError:
+                return None
+            if not math.isfinite(number):
+                return None
+            numbers.append(number)
+        return numbers or None
+
+    @classmethod
+    def _compute_cautions(
+        cls,
+        parameters: list[dict[str, str]],
+        context: Any,
+    ) -> dict[int, list[str]]:
+        """Soft guardrails: warnings shown in the preview, never a reason to drop a proposal."""
+        cautions: dict[int, list[str]] = {}
+        if not isinstance(context, dict):
+            return cautions
+        printer = context.get("printer") if isinstance(context.get("printer"), dict) else {}
+        filament_values = cls._values_for_category("filament", context)
+        if not isinstance(filament_values, dict):
+            filament_values = {}
+        proposed = {(p["category"], p["key"]): p["value"] for p in parameters}
+
+        def current(category: str, key: str) -> Any:
+            values = cls._values_for_category(category, context)
+            return values.get(key) if isinstance(values, dict) else None
+
+        def effective(category: str, key: str) -> Any:
+            return proposed.get((category, key), current(category, key))
+
+        def first(category: str, key: str) -> float | None:
+            numbers = cls._percent_numbers(effective(category, key))
+            return numbers[0] if numbers else None
+
+        def add(index: int, text: str) -> None:
+            notes = cautions.setdefault(index, [])
+            if text not in notes:
+                notes.append(text)
+
+        nozzles = [
+            number
+            for number in (cls._numeric_components(printer.get("nozzle_diameter")) or [])
+            if number > 0
+        ]
+        range_low = cls._numeric_components(filament_values.get("nozzle_temperature_range_low"))
+        range_high = cls._numeric_components(filament_values.get("nozzle_temperature_range_high"))
+
+        for index, parameter in enumerate(parameters):
+            category = parameter["category"]
+            key = parameter["key"]
+            spec = PARAMETER_SPECS[key]
+            new_numbers = cls._percent_numbers(parameter["value"])
+            old_numbers = cls._percent_numbers(current(category, key))
+
+            if (
+                spec.kind not in {"boolean", "enum"}
+                and new_numbers
+                and old_numbers
+                and len(new_numbers) == len(old_numbers)
+                and any(
+                    old != 0 and abs(new - old) / abs(old) > MAX_RELATIVE_CHANGE
+                    for old, new in zip(old_numbers, new_numbers)
+                )
+            ):
+                add(index, "Large change (over 50%) from the current value.")
+
+            if key == "layer_height" and new_numbers:
+                height = new_numbers[0]
+                if not nozzles:
+                    add(index, "Nozzle diameter is unavailable, so the layer height was not checked against it.")
+                elif height > 0.8 * min(nozzles) + 1e-9:
+                    add(index, "Above 80% of the nozzle diameter; layer adhesion may suffer.")
+                lows = [n for n in (cls._numeric_components(printer.get("min_layer_height")) or []) if n > 0]
+                highs = [n for n in (cls._numeric_components(printer.get("max_layer_height")) or []) if n > 0]
+                if lows and height < max(lows) - 1e-9:
+                    add(index, "Below the printer's minimum layer height (that limit applies to adaptive layers).")
+                if highs and height > min(highs) + 1e-9:
+                    add(index, "Above the printer's maximum layer height (that limit applies to adaptive layers).")
+
+            if key in {"nozzle_temperature", "nozzle_temperature_initial_layer"} and new_numbers:
+                for position, temperature in enumerate(new_numbers):
+                    low = range_low[min(position, len(range_low) - 1)] if range_low else 0
+                    high = range_high[min(position, len(range_high) - 1)] if range_high else 0
+                    if low > 0 and temperature < low:
+                        add(index, f"Below the filament's recommended range ({low:g}–{high:g} °C)." if high > 0 else "Below the filament's recommended range.")
+                    if high > 0 and temperature > high:
+                        add(index, f"Above the filament's recommended range ({low:g}–{high:g} °C)." if low > 0 else "Above the filament's recommended range.")
+                if max(new_numbers) > 300:
+                    add(index, "Above 300 °C needs an all-metal hotend and a suitable nozzle.")
+                normal = first("filament", "nozzle_temperature")
+                initial = first("filament", "nozzle_temperature_initial_layer")
+                if normal is not None and initial is not None and abs(normal - initial) > 30:
+                    add(index, "First-layer and normal nozzle temperatures differ by more than 30 °C.")
+
+            if key in {"hot_plate_temp", "hot_plate_temp_initial_layer"}:
+                normal = first("filament", "hot_plate_temp")
+                initial = first("filament", "hot_plate_temp_initial_layer")
+                if normal is not None and initial is not None and abs(normal - initial) > 30:
+                    add(index, "First-layer and normal bed temperatures differ by more than 30 °C.")
+
+            if key == "filament_flow_ratio" and new_numbers:
+                if any(number < 0.85 or number > 1.15 for number in new_numbers):
+                    add(index, "Flow ratio outside 0.85–1.15 is unusual; calibrate before using it.")
+
+            if key in {"support_style", "support_threshold_angle"}:
+                if str(effective("process", "enable_support")) == "0":
+                    add(index, "Support is disabled, so this setting has no effect until enable_support is on.")
+
+            if key in {"initial_layer_speed", "outer_wall_speed"}:
+                initial_speed = first("process", "initial_layer_speed")
+                outer_speed = first("process", "outer_wall_speed")
+                if initial_speed is not None and outer_speed is not None and initial_speed > outer_speed:
+                    add(index, "First-layer speed exceeds the outer-wall speed; first layers are normally slower.")
+
+            if key == "wall_loops" and new_numbers and new_numbers[0] == 0:
+                add(index, "Zero wall loops produces no perimeters.")
+
+        return cautions
+
+    @classmethod
+    def _attach_cautions(cls, parameters: list[dict[str, str]], context: Any) -> None:
+        for index, notes in cls._compute_cautions(parameters, context).items():
+            parameters[index]["caution"] = " ".join(notes)
 
     @classmethod
     def _normalize_parameter_value(
@@ -1348,6 +2064,7 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
         spec = PARAMETER_SPECS.get(key)
         if spec is None:
             return None
+        spec = cls._effective_spec(key, spec, current_value, context)
 
         if (
             key in {"hot_plate_temp", "hot_plate_temp_initial_layer"}
@@ -1419,7 +2136,7 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
             normalized_components.append(normalized)
         return ",".join(normalized_components)
 
-    async def _apply_parameters(
+    def _apply_parameters(
         self,
         raw_parameters: Any,
         raw_target: Any,
@@ -1513,10 +2230,6 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                 preset_name=target_name,
             )
 
-        # begin_update() may block while OrcaSlicer resolves the target. Yield once afterwards so
-        # plugin cancellation can prevent the staged settings from being committed.
-        await asyncio.sleep(0)
-
         for parameter in parameters:
             transaction.set(parameter["key"], parameter["value"])
 
@@ -1573,7 +2286,10 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                     "slot": slot,
                     "name": filament_name[:256],
                     "shared_slots": shared_slots,
-                    "values": self._preset_values(filament, FILAMENT_PARAMETERS),
+                    "values": self._preset_values(
+                        filament,
+                        {**FILAMENT_CONTEXT_PARAMETERS, **FILAMENT_PARAMETERS},
+                    ),
                 }
             )
         return context
@@ -1590,12 +2306,17 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
                 values[key] = str(value)[:512]
         return values
 
+    def _history_snapshot(self) -> list[dict[str, str]]:
+        with self._lock:
+            return list(self._history)
+
     def _post_state(self, context: Any = None) -> None:
         state_context = context if isinstance(context, dict) else {}
         response: dict[str, Any] = {
             "type": "state",
             "default_model": DEFAULT_MODEL,
-            "history": list(self._history),
+            "version": PLUGIN_VERSION,
+            "history": self._history_snapshot(),
         }
         if state_context.get("error"):
             response["warning"] = str(state_context["error"])
@@ -1608,10 +2329,7 @@ class AIAgentCapability(orca.script.ScriptPluginCapabilityBase):
         code: str | None = None,
         request_id: str | None = None,
     ) -> None:
-        message = str(error) or error.__class__.__name__
-        if api_key:
-            message = message.replace(api_key, "***")
-        message = GOOGLE_API_KEY_PATTERN.sub("***", message)
+        message = _redact_secret(str(error) or error.__class__.__name__, api_key)
         message = message[:MAX_ERROR_LENGTH]
         response: dict[str, Any] = {"type": "error", "message": message}
         if code:
@@ -1639,5 +2357,12 @@ class OrcaAIAgentPackage(orca.base):
         # request_permissions() is valid only while the package registers. The panel file is inside
         # the plugin's implicitly allowed data directory. Browser localStorage is not a Python
         # filesystem operation, so it needs no additional host permission.
-        orca.request_permissions(network=[GEMINI_API_ORIGIN])
+        request_permissions = getattr(orca, "request_permissions", None)
+        if callable(request_permissions):
+            try:
+                # Exact URLs only: chat and model listing. No file, socket or process access.
+                request_permissions(network=[GEMINI_CHAT_URL, GEMINI_MODELS_URL])
+            except Exception:
+                # Older/newer hosts may grant network access on first use (permission prompt).
+                pass
         orca.register_capability(AIAgentCapability)

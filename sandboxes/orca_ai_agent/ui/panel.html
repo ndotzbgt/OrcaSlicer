@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
   <title>Orca AI Agent</title>
   <style>
     :root {
@@ -169,6 +171,14 @@
       letter-spacing: 0.01em;
     }
 
+    .version {
+      margin-left: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
     .subtitle {
       overflow: hidden;
       color: var(--muted);
@@ -276,6 +286,40 @@
       margin: 0;
     }
 
+    .model-controls {
+      display: flex;
+      min-width: 0;
+      gap: 6px;
+    }
+
+    .model-controls input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .model-row select {
+      grid-column: 2;
+      width: 100%;
+      height: 30px;
+      padding: 0 6px;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+
+    .model-status {
+      grid-column: 2;
+      min-height: 13px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.3;
+    }
+
+    .model-status.busy { color: var(--accent); }
+    .model-status.ready { color: var(--success); }
+    .model-status.error { color: var(--danger); }
+
     .mini-button {
       padding: 5px 8px;
       font-size: 11px;
@@ -349,6 +393,10 @@
       padding: 6px 12px 9px;
       color: var(--muted);
       font-size: 11px;
+    }
+
+    .thinking .mini-button {
+      margin-left: auto;
     }
 
     .dots {
@@ -457,6 +505,12 @@
       font-size: 10px;
     }
 
+    .parameter-caution {
+      margin-top: 3px;
+      color: #ffd28a;
+      font-size: 10px;
+    }
+
     .badge {
       flex: 0 0 auto;
       padding: 1px 5px;
@@ -510,7 +564,7 @@
     <header class="header">
       <div class="logo" aria-hidden="true">AI</div>
       <div class="title-block">
-        <h1>Orca AI Agent</h1>
+        <h1>Orca AI Agent <span id="pluginVersion" class="version" title="Plugin version">v__PLUGIN_VERSION__</span></h1>
         <div class="subtitle">Gemini • OrcaSlicer preset assistant</div>
       </div>
       <div id="status" class="status" role="status">Connecting…</div>
@@ -541,8 +595,16 @@
 
       <div class="model-row">
         <label class="field-label" for="model">Model</label>
-        <input id="model" type="text" value="gemini-3.8-flash" maxlength="100"
-               spellcheck="false" autocomplete="off">
+        <div class="model-controls">
+          <input id="model" type="text" value="gemini-3.8-flash" maxlength="100"
+                 list="modelList" spellcheck="false" autocomplete="off"
+                 placeholder="Type a model name or fetch the list">
+          <datalist id="modelList"></datalist>
+          <button id="fetchModels" class="secondary mini-button" type="button"
+                  title="Load the models available to your API key">Fetch Models</button>
+        </div>
+        <select id="modelSelect" aria-label="Fetched models" hidden></select>
+        <div id="modelStatus" class="model-status" role="status"></div>
       </div>
 
       <p class="privacy-note">
@@ -560,6 +622,7 @@
     <div id="thinking" class="thinking" hidden>
       <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
       <span id="thinkingText">Gemini is thinking…</span>
+      <button id="cancelRequest" class="secondary mini-button" type="button">Cancel</button>
     </div>
 
     <section id="preview" class="preview" aria-label="Parameter preview" hidden>
@@ -587,14 +650,19 @@
       var bridge = window.orca;
       var STORAGE_API_KEY = "orca.ai_agent.api_key";
       var STORAGE_MODEL = "orca.ai_agent.model";
+      var STORAGE_MODELS = "orca.ai_agent.models";
+      var MAX_MODELS = 100;
+      var FETCH_MODELS_TIMEOUT_MS = 35000;
       var DEFAULT_MODEL = "gemini-3.8-flash";
       var MAX_API_KEY_LENGTH = 4096;
+      var MIN_REDACTABLE_SECRET_LENGTH = 8;
       var MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
       var ACK_TIMEOUT_MS = 5000;
       var CHAT_RESPONSE_TIMEOUT_MS = 90000;
       var APPLY_RESPONSE_TIMEOUT_MS = 300000;
       var elements = {
         status: document.getElementById("status"),
+        version: document.getElementById("pluginVersion"),
         clearChat: document.getElementById("clearChat"),
         apiKey: document.getElementById("apiKey"),
         toggleKey: document.getElementById("toggleKey"),
@@ -602,10 +670,15 @@
         forgetKey: document.getElementById("forgetKey"),
         saveSettings: document.getElementById("saveSettings"),
         model: document.getElementById("model"),
+        modelList: document.getElementById("modelList"),
+        modelSelect: document.getElementById("modelSelect"),
+        modelStatus: document.getElementById("modelStatus"),
+        fetchModels: document.getElementById("fetchModels"),
         chatLog: document.getElementById("chatLog"),
         welcome: document.getElementById("welcome"),
         thinking: document.getElementById("thinking"),
         thinkingText: document.getElementById("thinkingText"),
+        cancelRequest: document.getElementById("cancelRequest"),
         preview: document.getElementById("preview"),
         parameterTarget: document.getElementById("parameterTarget"),
         parameterNotice: document.getElementById("parameterNotice"),
@@ -656,6 +729,56 @@
         }
       }
 
+      function setModelStatus(text, kind) {
+        elements.modelStatus.textContent = redactSecrets(text);
+        elements.modelStatus.className = "model-status" + (kind ? " " + kind : "");
+      }
+
+      function normalizeModels(list) {
+        var seen = {};
+        var result = [];
+        if (!Array.isArray(list)) {
+          return result;
+        }
+        list.forEach(function (name) {
+          if (typeof name === "string" && MODEL_PATTERN.test(name) && !seen[name] && result.length < MAX_MODELS) {
+            seen[name] = true;
+            result.push(name);
+          }
+        });
+        return result;
+      }
+
+      function syncModelSelect() {
+        var current = elements.model.value.trim();
+        var found = current !== "" && Array.prototype.some.call(elements.modelSelect.options, function (option) {
+          return option.value === current;
+        });
+        elements.modelSelect.value = found ? current : "";
+      }
+
+      function renderModels(models) {
+        elements.modelList.replaceChildren();
+        elements.modelSelect.replaceChildren();
+        var placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Choose a fetched model…";
+        elements.modelSelect.appendChild(placeholder);
+        models.forEach(function (name) {
+          var suggestion = document.createElement("option");
+          suggestion.value = name;
+          elements.modelList.appendChild(suggestion);
+          var choice = document.createElement("option");
+          choice.value = name;
+          choice.textContent = name;
+          elements.modelSelect.appendChild(choice);
+        });
+        // The <select> is shown as well because a <datalist> only suggests entries that match the
+        // current text (and some WebViews do not render it at all).
+        elements.modelSelect.hidden = models.length === 0;
+        syncModelSelect();
+      }
+
       function loadStoredSettings() {
         var storedKey = readStorage(STORAGE_API_KEY);
         var normalizedKey = storedKey ? storedKey.trim() : "";
@@ -682,6 +805,17 @@
           if (storedModel) {
             removeStorage(STORAGE_MODEL);
           }
+        }
+
+        var storedModels = [];
+        try {
+          storedModels = normalizeModels(JSON.parse(readStorage(STORAGE_MODELS) || "[]"));
+        } catch (error) {
+          storedModels = [];
+        }
+        if (storedModels.length) {
+          renderModels(storedModels);
+          setModelStatus(storedModels.length + " saved models. Fetch again to refresh.", "");
         }
       }
 
@@ -751,6 +885,8 @@
         state.request = null;
 
         if (request.action === "chat") {
+          // Keep the backend in sync: stop the request and drop a late answer from its history.
+          send("cancel", { request_id: request.id });
           setBusy(false);
           setStatus("Request timed out", "error");
           addMessage(
@@ -769,6 +905,11 @@
               ? "The OrcaSlicer host did not acknowledge the apply request. Check the preset before retrying."
               : "The host did not finish applying the changes in time. Check the preset before retrying."
           );
+        } else if (request.action === "fetch_models") {
+          send("cancel", { request_id: request.id });
+          updateControls();
+          setStatus("Fetch timed out", "error");
+          setModelStatus("Fetching models timed out. You can still type a model name.", "error");
         } else {
           updateControls();
           setStatus("Clear timed out", "error");
@@ -790,7 +931,9 @@
         }
         var timeout = request.action === "chat"
           ? CHAT_RESPONSE_TIMEOUT_MS
-          : (request.action === "apply" ? APPLY_RESPONSE_TIMEOUT_MS : ACK_TIMEOUT_MS);
+          : (request.action === "apply"
+            ? APPLY_RESPONSE_TIMEOUT_MS
+            : (request.action === "fetch_models" ? FETCH_MODELS_TIMEOUT_MS : ACK_TIMEOUT_MS));
         request.responseTimer = window.setTimeout(function () {
           timeoutRequest(request, "response");
         }, timeout);
@@ -812,6 +955,8 @@
         updateControls();
         if (action === "clear_history") {
           setStatus("Clearing…", "busy");
+        } else if (action === "fetch_models") {
+          setStatus("Fetching models…", "busy");
         }
 
         var requestPayload = payload || {};
@@ -851,6 +996,11 @@
         elements.forgetKey.disabled = blocked;
         elements.saveSettings.disabled = blocked;
         elements.model.disabled = blocked;
+        elements.modelSelect.disabled = blocked;
+        // While a fetch is running the same button cancels it.
+        var fetching = state.request !== null && state.request.action === "fetch_models";
+        elements.fetchModels.disabled = blocked && !fetching;
+        elements.fetchModels.textContent = fetching ? "Cancel" : "Fetch Models";
       }
 
       function setBusy(busy) {
@@ -880,6 +1030,15 @@
         elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
       }
 
+      function redactSecrets(text) {
+        var value = String(text || "");
+        var key = elements.apiKey.value.trim();
+        if (key.length >= MIN_REDACTABLE_SECRET_LENGTH) {
+          value = value.split(key).join("***");
+        }
+        return value.replace(/AIza[0-9A-Za-z_-]{20,}/g, "***");
+      }
+
       function addMessage(role, text) {
         state.hasLocalMessages = true;
         elements.welcome.hidden = true;
@@ -892,7 +1051,7 @@
 
         var bubble = document.createElement("div");
         bubble.className = "bubble";
-        bubble.textContent = String(text || "");
+        bubble.textContent = redactSecrets(text);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -1000,6 +1159,13 @@
             card.appendChild(reason);
           }
 
+          if (parameter.caution) {
+            var caution = document.createElement("div");
+            caution.className = "parameter-caution";
+            caution.textContent = "⚠ " + parameter.caution;
+            card.appendChild(caution);
+          }
+
           elements.parameterList.appendChild(card);
         });
 
@@ -1016,6 +1182,10 @@
         switch (message.type) {
           case "state":
             var firstState = !state.connected;
+            if (typeof message.version === "string" && /^[0-9A-Za-z.+-]{1,32}$/.test(message.version)) {
+              // The backend is the source of truth for the version shown in the header.
+              elements.version.textContent = "v" + message.version;
+            }
             var previousWarning = state.contextWarning;
             state.connected = true;
             state.contextWarning = message.warning || null;
@@ -1039,7 +1209,7 @@
             break;
 
           case "ack":
-            if (message.action === "chat" || message.action === "apply" || message.action === "clear_history") {
+            if (message.action === "chat" || message.action === "apply" || message.action === "clear_history" || message.action === "fetch_models") {
               acknowledgeRequest(message.request_id, message.action);
             }
             break;
@@ -1057,6 +1227,8 @@
               break;
             }
             finishRequest(message.request_id);
+            // The prompt stays in the box until now, so a failed or cancelled request loses no text.
+            elements.prompt.value = "";
             addMessage("model", message.reply || "Done.");
             if (message.warning) {
               addMessage("system", message.warning);
@@ -1067,13 +1239,18 @@
 
           case "error":
             var correlatedError = typeof message.request_id === "string" && message.request_id.length > 0;
+            var failedAction = null;
             if (correlatedError) {
               if (!state.request || message.request_id !== state.request.id) {
                 break;
               }
+              failedAction = state.request.action;
               finishRequest(message.request_id);
             }
             addMessage("system", message.message || "Something went wrong.");
+            if (failedAction === "fetch_models") {
+              setModelStatus(message.message || "Could not fetch models. You can still type a model name.", "error");
+            }
             if (correlatedError) {
               setBusy(false);
               setApplying(false);
@@ -1087,6 +1264,27 @@
             if (message.code === "apply_failed" && correlatedError) {
               clearParameters();
             }
+            break;
+
+          case "models":
+            if (!state.request || state.request.action !== "fetch_models" || message.request_id !== state.request.id) {
+              break;
+            }
+            finishRequest(message.request_id);
+            var fetched = normalizeModels(message.models);
+            if (!fetched.length) {
+              setModelStatus("No usable models returned. You can still type a model name.", "error");
+              setStatus("No models", "error");
+              break;
+            }
+            renderModels(fetched);
+            writeStorage(STORAGE_MODELS, JSON.stringify(fetched));
+            setModelStatus(fetched.length + " models loaded. You can still type any model name.", "ready");
+            setStatus("Models loaded", "ready");
+            break;
+
+          case "cancelled":
+            // Backend confirmation of a cancel request; the panel already reset itself.
             break;
 
           case "history_cleared":
@@ -1189,13 +1387,13 @@
           return;
         }
         addMessage("user", prompt.split(apiKey).join("***"));
-        elements.prompt.value = "";
       }
 
       elements.send.addEventListener("click", submitPrompt);
 
       elements.prompt.addEventListener("keydown", function (event) {
-        if (event.key === "Enter" && !event.shiftKey) {
+        // Ignore the Enter that confirms an IME composition (isComposing / legacy keyCode 229).
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
           event.preventDefault();
           submitPrompt();
         }
@@ -1339,6 +1537,61 @@
         if (!startRequest("apply", { parameters: state.parameters, target: state.target })) {
           setApplying(false);
           return;
+        }
+      });
+
+      function cancelActiveRequest(statusText) {
+        var request = state.request;
+        if (!request || (request.action !== "chat" && request.action !== "fetch_models")) {
+          return false;
+        }
+        clearRequestTimers(request);
+        state.request = null;
+        send("cancel", { request_id: request.id });
+        if (request.action === "chat") {
+          setBusy(false);
+        } else {
+          updateControls();
+        }
+        setStatus(statusText, "ready");
+        return true;
+      }
+
+      elements.cancelRequest.addEventListener("click", function () {
+        cancelActiveRequest("Request cancelled");
+      });
+
+      elements.fetchModels.addEventListener("click", function () {
+        if (cancelActiveRequest("Fetch cancelled")) {
+          setModelStatus("Fetch cancelled. You can still type a model name.", "");
+          return;
+        }
+        if (state.busy || state.applying || state.request) {
+          return;
+        }
+        var apiKey = elements.apiKey.value.trim();
+        if (!apiKey) {
+          setModelStatus("Enter an API key first.", "error");
+          elements.apiKey.focus();
+          return;
+        }
+        if (apiKey.length > MAX_API_KEY_LENGTH) {
+          setModelStatus("The API key is too long.", "error");
+          return;
+        }
+        setModelStatus("Fetching models…", "busy");
+        if (!startRequest("fetch_models", { api_key: apiKey })) {
+          setModelStatus("The OrcaSlicer host bridge is unavailable.", "error");
+        }
+      });
+
+      elements.model.addEventListener("input", syncModelSelect);
+
+      elements.modelSelect.addEventListener("change", function () {
+        if (elements.modelSelect.value) {
+          elements.model.value = elements.modelSelect.value;
+          // Reuse the model input's own validation and persistence.
+          elements.model.dispatchEvent(new Event("change"));
         }
       });
 
